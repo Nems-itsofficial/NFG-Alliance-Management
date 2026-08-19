@@ -97,7 +97,7 @@ const STYLE = `
   --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   background:var(--bg); color:var(--white); font-family:var(--font-body);
-  min-height:600px; border-radius:14px; overflow:hidden; border:1px solid var(--border-soft);
+  min-height:100vh; overflow:hidden; border:none; border-radius:0;
   display:flex; }
 .wsc * { box-sizing:border-box; }
 .wsc-side { width:200px; flex-shrink:0; background:var(--bg-elev); border-right:1px solid var(--border-soft);
@@ -108,13 +108,15 @@ const STYLE = `
 .wsc-brand-text { font-family:var(--font-display); font-weight:700; font-size:13px; letter-spacing:0.06em;
   text-transform:uppercase; line-height:1.2; }
 .wsc-brand-sub { font-size:10px; color:var(--steel-dim); letter-spacing:0.04em; }
+.wsc-brand-mobile { display:none; align-items:center; gap:6px; font-family:var(--font-display); font-weight:700;
+  font-size:11px; color:var(--frost); letter-spacing:0.04em; text-transform:uppercase; margin-bottom:2px; }
 .wsc-nav-btn { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:8px; border:none;
   background:transparent; color:var(--steel); font-size:13px; font-weight:500; cursor:pointer; text-align:left;
   font-family:var(--font-body); transition:background .12s,color .12s; }
 .wsc-nav-btn:hover { background:var(--panel-2); color:var(--white); }
 .wsc-nav-btn.active { background:var(--panel-2); color:var(--frost); box-shadow:inset 2px 0 0 var(--frost); }
 .wsc-nav-count { margin-left:auto; font-family:var(--font-mono); font-size:10.5px; color:var(--steel-dim); }
-.wsc-main { flex:1; min-width:0; display:flex; flex-direction:column; max-height:820px; }
+.wsc-main { flex:1; min-width:0; display:flex; flex-direction:column; }
 .wsc-topbar { padding:14px 22px; border-bottom:1px solid var(--border-soft); display:flex; align-items:center;
   justify-content:space-between; gap:12px; flex-shrink:0; }
 .wsc-title { font-family:var(--font-display); font-size:16px; font-weight:700; letter-spacing:0.02em; }
@@ -168,6 +170,29 @@ const STYLE = `
 .wsc-class-title { font-size:12px; font-weight:700; color:var(--frost); margin-bottom:8px; }
 .wsc-scroll::-webkit-scrollbar { width:8px; height:8px; }
 .wsc-scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:8px; }
+.wsc-grid-hero { display:grid; gap:12px; grid-template-columns: 220px 1fr; align-items:stretch; }
+.wsc-grid-pair { display:grid; gap:12px; grid-template-columns: 1fr 1fr; margin-top:14px; }
+.wsc-bottomnav { display:none; }
+@media (max-width: 760px) {
+  .wsc-side { display:none; }
+  .wsc-body { padding:14px 14px 80px; }
+  .wsc-topbar { padding:12px 14px; }
+  .wsc-title-row { display:flex; flex-direction:column; }
+  .wsc-brand-mobile { display:flex; }
+  .wsc-grid-hero { grid-template-columns: 1fr; }
+  .wsc-grid-pair { grid-template-columns: 1fr; margin-top:0; }
+  .wsc-modal { max-width:94vw !important; padding:16px; }
+  .wsc-modal.wide { max-width:94vw !important; }
+  .wsc-bottomnav { display:flex; position:fixed; bottom:0; left:0; right:0; background:var(--bg-elev);
+    border-top:1px solid var(--border-soft); padding:6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+    z-index:40; justify-content:space-around; }
+  .wsc-bottomnav-btn { display:flex; flex-direction:column; align-items:center; gap:2px; background:none;
+    border:none; color:var(--steel); font-size:10px; font-family:var(--font-body); padding:4px 8px; cursor:pointer;
+    position:relative; flex:1; }
+  .wsc-bottomnav-btn.active { color:var(--frost); }
+  .wsc-bottomnav-count { position:absolute; top:-2px; right:14px; background:var(--danger); color:#fff;
+    font-size:9px; font-weight:700; border-radius:20px; padding:1px 4px; font-family:var(--font-mono); }
+}
 `;
 
 function RankBadge({ rank }) {
@@ -213,9 +238,28 @@ function ReadinessGauge({ score }) {
     </svg>
   );
 }
+function BottomNav({ tab, setTab, leaverCount }) {
+  const items = [
+    { id: "dashboard", label: "Home", icon: LayoutDashboard },
+    { id: "roster", label: "Roster", icon: Users },
+    { id: "growth", label: "Growth", icon: TrendingUp },
+    { id: "events", label: "Events", icon: CalendarDays },
+    { id: "leavers", label: "Leavers", icon: UserX, count: leaverCount },
+  ];
+  return (
+    <div className="wsc-bottomnav">
+      {items.map((it) => (
+        <button key={it.id} className={`wsc-bottomnav-btn ${tab === it.id ? "active" : ""}`} onClick={() => setTab(it.id)}>
+          <it.icon size={18} />
+          <span>{it.label}</span>
+          {!!it.count && <span className="wsc-bottomnav-count">{it.count}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
 function Sidebar({ tab, setTab, allianceName, leaderName, leaverCount }) {
   const items = [
-    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "roster", label: "Roster", icon: Users },
     { id: "leavers", label: "Leavers", icon: UserX, count: leaverCount },
     { id: "growth", label: "Growth", icon: TrendingUp },
@@ -427,14 +471,14 @@ function Dashboard({ members, growth, events, participation, config }) {
         <div className="wsc-card"><div className="wsc-stat-label">At-risk</div><div className="wsc-stat-val" style={{ color: atRisk.length > 0 ? "var(--danger)" : "var(--white)" }}>{atRisk.length}</div></div>
         <div className="wsc-card"><div className="wsc-stat-label">Avg turnout</div><div className="wsc-stat-val">{events.length > 0 ? `${avgTurnout}%` : "—"}</div></div>
       </div>
-      <div className="wsc-grid" style={{ gridTemplateColumns: "220px 1fr", alignItems: "stretch" }}>
+      <div className="wsc-grid-hero">
         <div className="wsc-card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6 }}>
           <ReadinessGauge score={isNaN(readiness) ? 0 : readiness} />
           <div style={{ fontSize: 11, color: "var(--steel-dim)", textAlign: "center" }}>Blends recent-activity rate {latestEvent ? "and last event turnout" : "(log an event to add turnout)"}.</div>
         </div>
         <TierDistributionChart members={activeMembers} growth={growth} />
       </div>
-      <div className="wsc-grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 14 }}>
+      <div className="wsc-grid-pair">
         <div className="wsc-card">
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><TriangleAlert size={15} color="var(--amber)" /><div className="wsc-stat-label" style={{ margin: 0 }}>Members to check on</div></div>
           {atRisk.length === 0 ? <EmptyState title="Everyone's accounted for" body="No active member has gone quiet past your threshold." /> : (
@@ -1094,6 +1138,7 @@ export default function App() {
       <div className="wsc-main">
         <div className="wsc-topbar">
           <div>
+            <div className="wsc-brand-mobile"><Snowflake size={12} />{config.allianceName || "Alliance"}</div>
             <div className="wsc-title">
               {tab === "dashboard" && "Dashboard"}{tab === "roster" && "Roster"}{tab === "leavers" && "Leavers"}
               {tab === "growth" && "Growth"}{tab === "events" && "Events"}
@@ -1116,6 +1161,7 @@ export default function App() {
           {tab === "events" && <EventsTab events={events} members={members} participation={participation} onOpenEvent={(ev) => setOpenEvent(ev)} />}
         </div>
       </div>
+      <BottomNav tab={tab} setTab={setTab} leaverCount={leaverCount} />
       {showConfig && <ConfigModal config={config} onClose={() => setShowConfig(false)} onSave={saveConfig}
         onExportExcel={exportExcel} onExportSummary={exportSummary} onExportBackup={exportBackup} onImportBackup={importBackup} />}
       {(showAddMember || memberModal) && <MemberModal member={memberModal} onClose={() => { setShowAddMember(false); setMemberModal(null); }} onSave={saveMember} onDelete={deleteMember} />}
