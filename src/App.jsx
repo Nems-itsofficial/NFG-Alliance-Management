@@ -3,8 +3,8 @@ import * as XLSX from "xlsx";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import {
   LayoutDashboard, Users, TrendingUp, CalendarDays, Plus, X, Pencil,
-  Trash2, Snowflake, TriangleAlert, Search, Settings, Save,
-  ArrowUp, ArrowDown, Minus, Check, UserX, RotateCcw, Ban, Download, Upload, LogOut
+  Trash2, Snowflake, Search, Settings, Save,
+  ArrowUp, ArrowDown, Minus, Check, UserX, RotateCcw, Ban, Download, Upload, LogOut, Zap
 } from "lucide-react";
 import { supabase } from "./supabaseClient.js";
 import Login from "./Login.jsx";
@@ -59,8 +59,8 @@ const classSummary = (cls) => {
 };
 
 // ---------------------------------------------------------------- data layer (Supabase)
-const rowToMember = (r) => ({ id: r.id, name: r.name, gameId: r.game_id || "", rank: r.rank, status: r.status, joinDate: r.join_date || "", leftDate: r.left_date || "", notes: r.notes || "" });
-const memberToRow = (m) => ({ name: m.name, game_id: m.gameId || "", rank: m.rank, status: m.status, join_date: m.joinDate || null, left_date: m.leftDate || null, notes: m.notes || "" });
+const rowToMember = (r) => ({ id: r.id, name: r.name, gameId: r.game_id || "", rank: r.rank, status: r.status, customRole: r.custom_role || "", joinDate: r.join_date || "", leftDate: r.left_date || "", notes: r.notes || "" });
+const memberToRow = (m) => ({ name: m.name, game_id: m.gameId || "", rank: m.rank, status: m.status, custom_role: m.customRole || "", join_date: m.joinDate || null, left_date: m.leftDate || null, notes: m.notes || "" });
 const rowToGrowth = (r) => ({ memberId: r.member_id, power: r.power ?? "", previousPower: r.previous_power ?? "", furnaceLevel: r.furnace_level || "", classes: r.classes || {}, updatedDate: r.updated_date || "" });
 const growthToRow = (g) => ({ member_id: g.memberId, power: g.power === "" ? null : g.power, previous_power: g.previousPower === "" ? null : g.previousPower, furnace_level: g.furnaceLevel || "", classes: g.classes || {}, updated_date: g.updatedDate || null });
 const rowToEvent = (r) => ({ id: r.id, date: r.date, type: r.type, name: r.name, session: r.session || "" });
@@ -163,6 +163,8 @@ const STYLE = `
 .wsc-search input { border:none; background:transparent; padding:8px 0; font-size:13px; color:var(--white); flex:1; }
 .wsc-search input:focus { outline:none; }
 .wsc-pill { font-size:10.5px; padding:2px 8px; border-radius:20px; font-weight:700; letter-spacing:0.02em; }
+.wsc-role-badge { display:inline-block; padding:2px 9px; border-radius:20px; font-size:10.5px; font-weight:700;
+  letter-spacing:0.03em; text-transform:uppercase; border:1px solid; background:rgba(255,255,255,0.02); }
 .wsc-checkbox { width:15px; height:15px; accent-color:var(--frost); cursor:pointer; }
 .wsc-bulk-bar { display:flex; align-items:center; gap:10px; background:#6FCBEA14; border:1px solid var(--frost-dim);
   border-radius:8px; padding:8px 12px; margin-bottom:12px; font-size:12.5px; color:var(--frost); }
@@ -200,10 +202,21 @@ function RankBadge({ rank }) {
   const c = colors[rank] || "#5C7086";
   return <span className="wsc-badge" style={{ background: `${c}22`, color: c }}>{rank}</span>;
 }
-function StatusPill({ status }) {
-  const map = { active: { c: "#5FBF8C", l: "Active" }, inactive: { c: "#E2604F", l: "Inactive" }, left: { c: "#8397AA", l: "Left" } };
-  const s = map[status] || map.active;
-  return <span className="wsc-pill" style={{ background: `${s.c}22`, color: s.c }}>{s.l}</span>;
+const NEON_COLORS = ["#39FF88", "#00E5FF", "#FF3EC8", "#FFD23F", "#B14EFF", "#FF5F5F", "#4EFFE0"];
+const roleColor = (label) => {
+  if (!label) return "#5C7086";
+  let hash = 0;
+  for (let i = 0; i < label.length; i++) hash = (hash * 31 + label.charCodeAt(i)) >>> 0;
+  return NEON_COLORS[hash % NEON_COLORS.length];
+};
+function RoleBadge({ label }) {
+  if (!label) return <span style={{ color: "var(--steel-dim)" }}>—</span>;
+  const c = roleColor(label);
+  return (
+    <span className="wsc-role-badge" style={{ color: c, borderColor: c, boxShadow: `0 0 6px ${c}66, 0 0 1px ${c}` }}>
+      {label}
+    </span>
+  );
 }
 function Modal({ title, onClose, children, wide }) {
   return (
@@ -285,7 +298,6 @@ function Sidebar({ tab, setTab, allianceName, leaderName, leaverCount }) {
 function ConfigModal({ config, onClose, onSave, onExportExcel, onExportSummary, onExportBackup, onImportBackup }) {
   const [name, setName] = useState(config.allianceName || "");
   const [leader, setLeader] = useState(config.leaderName || "");
-  const [threshold, setThreshold] = useState(config.inactivityDays ?? 10);
   const [retention, setRetention] = useState(config.leaverRetentionDays ?? 90);
   const [importMsg, setImportMsg] = useState("");
   const fileRef = useRef(null);
@@ -306,15 +318,12 @@ function ConfigModal({ config, onClose, onSave, onExportExcel, onExportSummary, 
         <input className="wsc-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Frostbound" /></div>
       <div className="wsc-field"><label className="wsc-label">Alliance leader name</label>
         <input className="wsc-input" value={leader} onChange={(e) => setLeader(e.target.value)} placeholder="e.g. Chief Frost" /></div>
-      <div className="wsc-field"><label className="wsc-label">Inactivity flag threshold (days)</label>
-        <input className="wsc-input" type="number" min="1" value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} />
-        <div style={{ fontSize: 11.5, color: "var(--steel-dim)", marginTop: 5 }}>Active members with no logged activity in this many days show up as at-risk on the dashboard.</div></div>
       <div className="wsc-field"><label className="wsc-label">Leaver data retention (days)</label>
         <input className="wsc-input" type="number" min="1" value={retention} onChange={(e) => setRetention(Number(e.target.value))} />
         <div style={{ fontSize: 11.5, color: "var(--steel-dim)", marginTop: 5 }}>Members marked "left" stay on the Leavers tab this long, then are wiped on next load.</div></div>
       <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "flex-end" }}>
         <button className="wsc-btn" onClick={onClose}>Cancel</button>
-        <button className="wsc-btn wsc-btn-primary" onClick={() => onSave({ allianceName: name, leaderName: leader, inactivityDays: threshold, leaverRetentionDays: retention })}><Save size={13} /> Save</button>
+        <button className="wsc-btn wsc-btn-primary" onClick={() => onSave({ allianceName: name, leaderName: leader, inactivityDays: config.inactivityDays ?? 10, leaverRetentionDays: retention })}><Save size={13} /> Save</button>
       </div>
       <div style={{ borderTop: "1px solid var(--border-soft)", marginTop: 20, paddingTop: 16 }}>
         <label className="wsc-label">Data</label>
@@ -334,11 +343,15 @@ function ConfigModal({ config, onClose, onSave, onExportExcel, onExportSummary, 
   );
 }
 function MemberModal({ member, onClose, onSave, onDelete }) {
-  const [form, setForm] = useState(member || { name: "", gameId: "", rank: "R1", status: "active", joinDate: "", leftDate: "", notes: "" });
+  const [form, setForm] = useState(member || { name: "", gameId: "", rank: "R1", status: "active", customRole: "", joinDate: "", leftDate: "", notes: "" });
   const isEdit = !!member;
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const canSave = form.name.trim().length > 0;
-  const onStatusChange = (status) => { if (status === "left" && !form.leftDate) set("leftDate", todayStr()); setForm((f) => ({ ...f, status })); };
+  const isLeft = form.status === "left";
+  const toggleLeft = (checked) => {
+    if (checked && !form.leftDate) set("leftDate", todayStr());
+    setForm((f) => ({ ...f, status: checked ? "left" : "active" }));
+  };
   return (
     <Modal title={isEdit ? "Edit member" : "Add member"} onClose={onClose}>
       <div className="wsc-field"><label className="wsc-label">In-game name</label>
@@ -348,22 +361,24 @@ function MemberModal({ member, onClose, onSave, onDelete }) {
       <div style={{ display: "flex", gap: 10 }}>
         <div className="wsc-field" style={{ flex: 1 }}><label className="wsc-label">Rank</label>
           <select className="wsc-select" value={form.rank} onChange={(e) => set("rank", e.target.value)}>{RANKS.map((r) => <option key={r} value={r}>{r}</option>)}</select></div>
-        <div className="wsc-field" style={{ flex: 1 }}><label className="wsc-label">Status</label>
-          <select className="wsc-select" value={form.status} onChange={(e) => onStatusChange(e.target.value)}>
-            <option value="active">Active</option><option value="inactive">Inactive</option><option value="left">Left alliance</option>
-          </select></div>
+        <div className="wsc-field" style={{ flex: 1 }}><label className="wsc-label">Custom role (optional)</label>
+          <input className="wsc-input" value={form.customRole || ""} onChange={(e) => set("customRole", e.target.value)} placeholder="e.g. Rally Lead" /></div>
       </div>
       <div style={{ display: "flex", gap: 10 }}>
         <div className="wsc-field" style={{ flex: 1 }}><label className="wsc-label">Join date</label>
           <input className="wsc-input" type="date" value={form.joinDate} onChange={(e) => set("joinDate", e.target.value)} />
           <div style={{ fontSize: 11, color: "var(--steel-dim)", marginTop: 4 }}>Blank by default — set it if you know it, otherwise tenure just shows "Unknown" instead of guessing.</div></div>
-        {form.status === "left" && (
+        {isLeft && (
           <div className="wsc-field" style={{ flex: 1 }}><label className="wsc-label">Left date</label>
             <input className="wsc-input" type="date" value={form.leftDate} onChange={(e) => set("leftDate", e.target.value)} /></div>
         )}
       </div>
+      <div className="wsc-field" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <input type="checkbox" className="wsc-checkbox" id="left-toggle" checked={isLeft} onChange={(e) => toggleLeft(e.target.checked)} />
+        <label htmlFor="left-toggle" style={{ fontSize: 12.5, color: "var(--steel)", cursor: "pointer" }}>This member has left the alliance</label>
+      </div>
       <div className="wsc-field"><label className="wsc-label">Notes</label>
-        <textarea className="wsc-textarea" rows={2} value={form.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Timezone, role, anything worth remembering" /></div>
+        <textarea className="wsc-textarea" rows={2} value={form.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Timezone, anything worth remembering" /></div>
       <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "space-between" }}>
         {isEdit ? <button className="wsc-btn wsc-btn-danger" onClick={() => onDelete(form.id)}><Trash2 size={13} /> Delete permanently</button> : <span />}
         <div style={{ display: "flex", gap: 8 }}>
@@ -389,68 +404,95 @@ function BulkLeaveModal({ count, onClose, onConfirm }) {
     </Modal>
   );
 }
-function TierDistributionChart({ members, growth }) {
-  const [cls, setCls] = useState("infantry");
+const CLASS_COLORS = { infantry: "#6FCBEA", marksman: "#E8A33D", lancer: "#B14EFF" };
+function EndgameProgressChart({ members, growth }) {
   const byMember = useMemo(() => { const map = {}; growth.forEach((g) => { map[g.memberId] = g; }); return map; }, [growth]);
+  const buckets = ["Below FC", ...FC_TROOP_LEVELS.filter(Boolean)];
   const chartData = useMemo(() => {
-    const tierBuckets = TROOP_TIERS.filter(Boolean).map((t) => ({ label: t, count: 0 }));
-    let fcCount = 0, untracked = 0;
+    const data = buckets.map((b) => ({ label: b, infantry: 0, marksman: 0, lancer: 0 }));
     members.forEach((m) => {
-      const c = byMember[m.id]?.classes?.[cls];
-      if (!c || (!c.troopTier && !c.fcTroopLevel)) { untracked++; return; }
-      if (c.fcTroopLevel) { fcCount++; return; }
-      const bucket = tierBuckets.find((b) => b.label === c.troopTier);
-      if (bucket) bucket.count++;
+      const g = byMember[m.id];
+      CLASSES.forEach((c) => {
+        const cls = g?.classes?.[c.key];
+        const bucketLabel = cls?.fcTroopLevel || "Below FC";
+        const row = data.find((d) => d.label === bucketLabel);
+        if (row) row[c.key] += 1;
+      });
     });
-    return [...tierBuckets, { label: "FC troops", count: fcCount }, { label: "Not set", count: untracked }];
-  }, [members, byMember, cls]);
+    return data;
+  }, [members, byMember]);
   return (
     <div className="wsc-card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-        <div className="wsc-stat-label" style={{ margin: 0 }}>Troop tier spread</div>
-        <select className="wsc-select" style={{ width: 140 }} value={cls} onChange={(e) => setCls(e.target.value)}>
-          {CLASSES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-        </select>
+        <div className="wsc-stat-label" style={{ margin: 0 }}>Endgame troop progress</div>
+        <div style={{ display: "flex", gap: 12 }}>
+          {CLASSES.map((c) => (
+            <div key={c.key} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--steel)" }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: CLASS_COLORS[c.key], display: "inline-block" }} />{c.label}
+            </div>
+          ))}
+        </div>
       </div>
-      {members.length === 0 ? <EmptyState title="No members yet" body="Add members to see their tier spread here." /> : (
+      {members.length === 0 ? <EmptyState title="No members yet" body="Add members to see endgame progress here." /> : (
         <ResponsiveContainer width="100%" height={190}>
           <BarChart data={chartData} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1B2C3E" />
             <XAxis dataKey="label" tick={{ fill: "#8397AA", fontSize: 10 }} axisLine={{ stroke: "#24384C" }} tickLine={false} interval={0} angle={-35} textAnchor="end" height={50} />
             <YAxis tick={{ fill: "#8397AA", fontSize: 11 }} axisLine={{ stroke: "#24384C" }} tickLine={false} allowDecimals={false} />
             <Tooltip contentStyle={{ background: "#132234", border: "1px solid #24384C", borderRadius: 8, fontSize: 12 }} labelStyle={{ color: "#E9F3F7" }} />
-            <Bar dataKey="count" radius={[4, 4, 0, 0]} fill="#6FCBEA" />
+            <Bar dataKey="infantry" name="Infantry" fill={CLASS_COLORS.infantry} radius={[3, 3, 0, 0]} />
+            <Bar dataKey="marksman" name="Marksman" fill={CLASS_COLORS.marksman} radius={[3, 3, 0, 0]} />
+            <Bar dataKey="lancer" name="Lancer" fill={CLASS_COLORS.lancer} radius={[3, 3, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       )}
     </div>
   );
 }
+function T12SkillCard({ members, growth }) {
+  const byMember = useMemo(() => { const map = {}; growth.forEach((g) => { map[g.memberId] = g; }); return map; }, [growth]);
+  const rows = useMemo(() => CLASSES.map((c) => {
+    const counts = [0, 0, 0, 0];
+    members.forEach((m) => {
+      const cls = byMember[m.id]?.classes?.[c.key];
+      if (cls?.troopTier === "T12") counts[cls.t12Skills || 0] += 1;
+    });
+    return { label: c.label, key: c.key, counts, total: counts.reduce((a, b) => a + b, 0) };
+  }), [members, byMember]);
+  const anyT12 = rows.some((r) => r.total > 0);
+  return (
+    <div className="wsc-card">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <Zap size={15} color="var(--frost)" /><div className="wsc-stat-label" style={{ margin: 0 }}>T12 skill progress</div>
+      </div>
+      {!anyT12 ? <EmptyState title="No T12 troops logged yet" body="Once members hit T12, their unlocked skills (0–3) show here." /> : (
+        <table className="wsc-table">
+          <thead><tr><th>Class</th><th>0/3</th><th>1/3</th><th>2/3</th><th>3/3</th></tr></thead>
+          <tbody>{rows.map((r) => (
+            <tr key={r.key}>
+              <td style={{ fontWeight: 600, color: CLASS_COLORS[r.key] }}>{r.label}</td>
+              {r.counts.map((n, i) => <td key={i} style={{ fontFamily: "var(--font-mono)", color: i === 3 && n > 0 ? "var(--success)" : "var(--steel)" }}>{n}</td>)}
+            </tr>
+          ))}</tbody>
+        </table>
+      )}
+    </div>
+  );
+}
 
 function Dashboard({ members, growth, events, participation, config }) {
-  const threshold = config.inactivityDays ?? 10;
   const activeMembers = members.filter((m) => m.status !== "left");
-  const lastActivityByMember = useMemo(() => {
-    const map = {};
-    activeMembers.forEach((m) => { map[m.id] = null; });
-    const consider = (memberId, date) => { if (!date) return; if (!map[memberId] || date > map[memberId]) map[memberId] = date; };
-    growth.forEach((g) => consider(g.memberId, g.updatedDate));
-    participation.forEach((p) => { if (!p.attended) return; const ev = events.find((e) => e.id === p.eventId); if (ev) consider(p.memberId, ev.date); });
-    return map;
-  }, [activeMembers, growth, participation, events]);
-  const atRisk = useMemo(() => activeMembers.filter((m) => m.status === "active")
-    .map((m) => ({ m, days: daysAgo(lastActivityByMember[m.id]) })).filter((x) => x.days >= threshold).sort((a, b) => b.days - a.days), [activeMembers, lastActivityByMember, threshold]);
+  const leaverCount = members.length - activeMembers.length;
   const noShows = useMemo(() => {
     const counts = {};
     participation.forEach((p) => { if (p.signedUp && !p.attended) counts[p.memberId] = (counts[p.memberId] || 0) + 1; });
     return Object.entries(counts).map(([memberId, count]) => ({ member: activeMembers.find((m) => m.id === memberId), count }))
       .filter((r) => r.member && r.count >= 2).sort((a, b) => b.count - a.count).slice(0, 8);
   }, [participation, activeMembers]);
-  const activeCount = activeMembers.filter((m) => m.status === "active").length;
-  const activityRatio = activeCount > 0 ? activeMembers.filter((m) => m.status === "active").filter((m) => daysAgo(lastActivityByMember[m.id]) < threshold).length / activeCount : 0;
+  const activeCount = activeMembers.length;
   const latestEvent = events.length ? [...events].sort((a, b) => b.date.localeCompare(a.date))[0] : null;
   const latestEventAttendance = latestEvent && activeCount > 0 ? participation.filter((p) => p.eventId === latestEvent.id && p.attended).length / activeCount : null;
-  const readiness = Math.round(latestEventAttendance !== null ? (activityRatio * 0.6 + latestEventAttendance * 0.4) * 100 : activityRatio * 100);
+  const readiness = latestEventAttendance !== null ? Math.round(latestEventAttendance * 100) : 0;
   const recentEvents = useMemo(() => [...events].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6).map((ev) => {
     const rows = participation.filter((p) => p.eventId === ev.id);
     const signed = rows.filter((p) => p.signedUp).length, attended = rows.filter((p) => p.attended).length;
@@ -467,25 +509,18 @@ function Dashboard({ members, growth, events, participation, config }) {
     <div>
       <div className="wsc-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px,1fr))", marginBottom: 14 }}>
         <div className="wsc-card"><div className="wsc-stat-label">Total members</div><div className="wsc-stat-val">{activeMembers.length}</div></div>
-        <div className="wsc-card"><div className="wsc-stat-label">Active</div><div className="wsc-stat-val" style={{ color: "var(--success)" }}>{activeCount}</div></div>
-        <div className="wsc-card"><div className="wsc-stat-label">At-risk</div><div className="wsc-stat-val" style={{ color: atRisk.length > 0 ? "var(--danger)" : "var(--white)" }}>{atRisk.length}</div></div>
+        <div className="wsc-card"><div className="wsc-stat-label">Events logged</div><div className="wsc-stat-val">{events.length}</div></div>
         <div className="wsc-card"><div className="wsc-stat-label">Avg turnout</div><div className="wsc-stat-val">{events.length > 0 ? `${avgTurnout}%` : "—"}</div></div>
+        <div className="wsc-card"><div className="wsc-stat-label">Leavers on file</div><div className="wsc-stat-val">{leaverCount}</div></div>
       </div>
       <div className="wsc-grid-hero">
         <div className="wsc-card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6 }}>
           <ReadinessGauge score={isNaN(readiness) ? 0 : readiness} />
-          <div style={{ fontSize: 11, color: "var(--steel-dim)", textAlign: "center" }}>Blends recent-activity rate {latestEvent ? "and last event turnout" : "(log an event to add turnout)"}.</div>
+          <div style={{ fontSize: 11, color: "var(--steel-dim)", textAlign: "center" }}>{latestEvent ? "Turnout at the most recent event." : "Log an event to see turnout here."}</div>
         </div>
-        <TierDistributionChart members={activeMembers} growth={growth} />
+        <EndgameProgressChart members={activeMembers} growth={growth} />
       </div>
       <div className="wsc-grid-pair">
-        <div className="wsc-card">
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><TriangleAlert size={15} color="var(--amber)" /><div className="wsc-stat-label" style={{ margin: 0 }}>Members to check on</div></div>
-          {atRisk.length === 0 ? <EmptyState title="Everyone's accounted for" body="No active member has gone quiet past your threshold." /> : (
-            <table className="wsc-table"><thead><tr><th>Member</th><th>Days silent</th></tr></thead>
-              <tbody>{atRisk.slice(0, 10).map(({ m, days }) => <tr key={m.id}><td>{m.name}</td><td style={{ color: "var(--danger)", fontFamily: "var(--font-mono)" }}>{isFinite(days) ? days : "—"}</td></tr>)}</tbody></table>
-          )}
-        </div>
         <div className="wsc-card">
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><Ban size={15} color="var(--danger)" /><div className="wsc-stat-label" style={{ margin: 0 }}>Frequent no-shows</div></div>
           {noShows.length === 0 ? <EmptyState title="No repeat no-shows" body="Members who sign up but don't attend twice or more will show here." /> : (
@@ -493,6 +528,7 @@ function Dashboard({ members, growth, events, participation, config }) {
               <tbody>{noShows.map(({ member, count }) => <tr key={member.id}><td>{member.name}</td><td style={{ color: "var(--danger)", fontFamily: "var(--font-mono)" }}>{count}</td></tr>)}</tbody></table>
           )}
         </div>
+        <T12SkillCard members={activeMembers} growth={growth} />
       </div>
       <div className="wsc-card" style={{ marginTop: 14 }}>
         <div className="wsc-stat-label" style={{ marginBottom: 10 }}>Recent event turnout</div>
@@ -511,15 +547,16 @@ function Dashboard({ members, growth, events, participation, config }) {
 function RosterTab({ members, lastActivityByMember, onEdit, onBulkLeave }) {
   const [query, setQuery] = useState("");
   const [rankFilter, setRankFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [roleFilter, setRoleFilter] = useState("all");
   const [selected, setSelected] = useState(new Set());
   const [showBulk, setShowBulk] = useState(false);
   const roster = members.filter((m) => m.status !== "left");
+  const roleOptions = useMemo(() => [...new Set(roster.map((m) => m.customRole).filter(Boolean))].sort(), [roster]);
   const filtered = roster.filter((m) => {
     const matchesQuery = m.name.toLowerCase().includes(query.toLowerCase()) || (m.gameId || "").includes(query);
     const matchesRank = rankFilter === "all" || m.rank === rankFilter;
-    const matchesStatus = statusFilter === "all" || m.status === statusFilter;
-    return matchesQuery && matchesRank && matchesStatus;
+    const matchesRole = roleFilter === "all" || m.customRole === roleFilter;
+    return matchesQuery && matchesRank && matchesRole;
   });
   const toggleOne = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleAll = () => setSelected((s) => s.size === filtered.length ? new Set() : new Set(filtered.map((m) => m.id)));
@@ -527,8 +564,8 @@ function RosterTab({ members, lastActivityByMember, onEdit, onBulkLeave }) {
     <div>
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
         <div className="wsc-search" style={{ flex: 1, minWidth: 180 }}><Search size={14} color="var(--steel-dim)" /><input placeholder="Search name or ID" value={query} onChange={(e) => setQuery(e.target.value)} /></div>
-        <select className="wsc-select" style={{ width: 130 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-          <option value="all">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option>
+        <select className="wsc-select" style={{ width: 140 }} value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
+          <option value="all">All roles</option>{roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
         </select>
         <select className="wsc-select" style={{ width: 120 }} value={rankFilter} onChange={(e) => setRankFilter(e.target.value)}>
           <option value="all">All ranks</option>{RANKS.map((r) => <option key={r} value={r}>{r}</option>)}
@@ -547,7 +584,7 @@ function RosterTab({ members, lastActivityByMember, onEdit, onBulkLeave }) {
           <div style={{ overflowX: "auto" }}>
             <table className="wsc-table">
               <thead><tr><th style={{ width: 30 }}><input type="checkbox" className="wsc-checkbox" checked={selected.size === filtered.length && filtered.length > 0} onChange={toggleAll} /></th>
-                <th>Name</th><th>Rank</th><th>Status</th><th>Joined</th><th>Tenure</th><th>Last activity</th><th></th></tr></thead>
+                <th>Name</th><th>Rank</th><th>Role</th><th>Joined</th><th>Tenure</th><th>Last activity</th><th></th></tr></thead>
               <tbody>
                 {filtered.map((m) => {
                   const last = lastActivityByMember[m.id];
@@ -556,7 +593,7 @@ function RosterTab({ members, lastActivityByMember, onEdit, onBulkLeave }) {
                       <td onClick={(e) => e.stopPropagation()}><input type="checkbox" className="wsc-checkbox" checked={selected.has(m.id)} onChange={() => toggleOne(m.id)} /></td>
                       <td style={{ fontWeight: 600, cursor: "pointer" }} onClick={() => onEdit(m)}>{m.name}</td>
                       <td><RankBadge rank={m.rank} /></td>
-                      <td><StatusPill status={m.status} /></td>
+                      <td><RoleBadge label={m.customRole} /></td>
                       <td style={{ color: "var(--steel)" }}>{m.joinDate ? fmtDate(m.joinDate) : "Unknown"}</td>
                       <td style={{ color: "var(--steel)", fontFamily: "var(--font-mono)" }}><TenureLabel joinDate={m.joinDate} /></td>
                       <td style={{ color: "var(--steel)" }}>{last ? fmtDate(last) : "No data"}</td>
@@ -585,7 +622,7 @@ function LeaversTab({ members, retentionDays, onReactivate, onPurgeNow, onEdit }
         {leavers.length === 0 ? <EmptyState title="No former members on file" body='Mark a member as "Left alliance" from the Roster tab to move them here.' /> : (
           <div style={{ overflowX: "auto" }}>
             <table className="wsc-table">
-              <thead><tr><th>Name</th><th>Game ID</th><th>Rank</th><th>Time in alliance</th><th>Left on</th><th>Purges in</th><th></th></tr></thead>
+              <thead><tr><th>Name</th><th>Game ID</th><th>Rank</th><th>Role</th><th>Time in alliance</th><th>Left on</th><th>Purges in</th><th></th></tr></thead>
               <tbody>
                 {leavers.map((m) => {
                   const elapsed = daysAgo(m.leftDate);
@@ -595,6 +632,7 @@ function LeaversTab({ members, retentionDays, onReactivate, onPurgeNow, onEdit }
                       <td style={{ fontWeight: 600, cursor: "pointer" }} onClick={() => onEdit(m)}>{m.name}</td>
                       <td style={{ color: "var(--steel-dim)" }}>{m.gameId || "—"}</td>
                       <td><RankBadge rank={m.rank} /></td>
+                      <td><RoleBadge label={m.customRole} /></td>
                       <td style={{ fontFamily: "var(--font-mono)" }}><TenureLabel joinDate={m.joinDate} endDate={m.leftDate} /></td>
                       <td style={{ color: "var(--steel)" }}>{fmtDate(m.leftDate)}</td>
                       <td style={{ color: remaining <= 7 ? "var(--amber)" : "var(--steel)", fontFamily: "var(--font-mono)" }}>{remaining} days</td>
@@ -838,6 +876,7 @@ function EventsTab({ events, members, participation, onOpenEvent }) {
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [tab, setTab] = useState("dashboard");
   const [config, setConfig] = useState({ allianceName: "", leaderName: "", inactivityDays: 10, leaverRetentionDays: 90 });
   const [members, setMembers] = useState([]);
@@ -861,26 +900,40 @@ export default function App() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  const userId = session?.user?.id || null;
+
   useEffect(() => {
-    if (!session) return;
+    if (!userId) return;
+    let cancelled = false;
     (async () => {
       setLoading(true);
-      const { config: cfg, members: mem, growth: gr, events: ev, participation: part } = await fetchAllData();
+      setLoadError("");
+      try {
+        const { config: cfg, members: mem, growth: gr, events: ev, participation: part } = await fetchAllData();
 
-      const retention = cfg.leaverRetentionDays ?? 90;
-      const purgedIds = mem.filter((m) => m.status === "left" && daysAgo(m.leftDate) > retention).map((m) => m.id);
-      let finalMembers = mem, finalGrowth = gr, finalPart = part;
-      if (purgedIds.length > 0) {
-        // FK cascade on members removes their growth/participation rows automatically.
-        await supabase.from("members").delete().in("id", purgedIds);
-        finalMembers = mem.filter((m) => !purgedIds.includes(m.id));
-        finalGrowth = gr.filter((g) => !purgedIds.includes(g.memberId));
-        finalPart = part.filter((p) => !purgedIds.includes(p.memberId));
+        const retention = cfg.leaverRetentionDays ?? 90;
+        const purgedIds = mem.filter((m) => m.status === "left" && daysAgo(m.leftDate) > retention).map((m) => m.id);
+        let finalMembers = mem, finalGrowth = gr, finalPart = part;
+        if (purgedIds.length > 0) {
+          // FK cascade on members removes their growth/participation rows automatically.
+          await supabase.from("members").delete().in("id", purgedIds);
+          finalMembers = mem.filter((m) => !purgedIds.includes(m.id));
+          finalGrowth = gr.filter((g) => !purgedIds.includes(g.memberId));
+          finalPart = part.filter((p) => !purgedIds.includes(p.memberId));
+        }
+        if (cancelled) return;
+        setConfig(cfg); setMembers(finalMembers); setGrowth(finalGrowth); setEvents(ev); setParticipation(finalPart);
+      } catch (err) {
+        console.error("Failed to load alliance data:", err);
+        if (!cancelled) setLoadError(err?.message || "Failed to load data. Check your connection and try refreshing.");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setConfig(cfg); setMembers(finalMembers); setGrowth(finalGrowth); setEvents(ev); setParticipation(finalPart);
-      setLoading(false);
     })();
-  }, [session]);
+    return () => { cancelled = true; };
+    // Only re-run when the signed-in user actually changes (sign in/out),
+    // not on every background token refresh (e.g. from switching browser tabs).
+  }, [userId]);
 
   const lastActivityByMember = useMemo(() => {
     const map = {};
@@ -892,12 +945,18 @@ export default function App() {
   }, [members, growth, participation, events]);
 
   const saveConfig = useCallback(async (next) => {
+    const prev = config;
     setConfig(next); setShowConfig(false);
-    await supabase.from("settings").update({
+    const { error } = await supabase.from("settings").update({
       alliance_name: next.allianceName, leader_name: next.leaderName,
       inactivity_days: next.inactivityDays, leaver_retention_days: next.leaverRetentionDays,
     }).eq("id", 1);
-  }, []);
+    if (error) {
+      console.error("Failed to save settings:", error);
+      setConfig(prev);
+      window.alert(`Couldn't save settings: ${error.message}`);
+    }
+  }, [config]);
 
   const saveMember = useCallback(async (m) => {
     if (memberModal) {
@@ -959,7 +1018,7 @@ export default function App() {
 
   const exportExcel = useCallback(() => {
     const wsMembers = XLSX.utils.json_to_sheet(members.map((m) => ({
-      Name: m.name, "Game ID": m.gameId || "", Rank: m.rank, Status: m.status,
+      Name: m.name, "Game ID": m.gameId || "", Rank: m.rank, "Custom role": m.customRole || "", Status: m.status,
       "Join date": m.joinDate || "", "Left date": m.leftDate || "",
       Tenure: formatTenure(m.joinDate, m.leftDate || null), Notes: m.notes || "",
     })));
@@ -990,16 +1049,12 @@ export default function App() {
   }, [members, growth, events, participation, config]);
 
   const exportSummary = useCallback(() => {
-    const threshold = config.inactivityDays ?? 10;
     const activeMembers = members.filter((m) => m.status !== "left");
-    const activeOnly = activeMembers.filter((m) => m.status === "active");
+    const leaverCount = members.length - activeMembers.length;
     const growthByMember = {}; growth.forEach((g) => { growthByMember[g.memberId] = g; });
-    const lastActivity = {};
-    activeMembers.forEach((m) => { lastActivity[m.id] = null; });
-    const consider = (id, d) => { if (!d) return; if (!lastActivity[id] || d > lastActivity[id]) lastActivity[id] = d; };
-    growth.forEach((g) => consider(g.memberId, g.updatedDate));
-    participation.forEach((p) => { if (!p.attended) return; const ev = events.find((e) => e.id === p.eventId); if (ev) consider(p.memberId, ev.date); });
-    const atRisk = activeOnly.map((m) => ({ name: m.name, days: daysAgo(lastActivity[m.id]) })).filter((x) => x.days >= threshold).sort((a, b) => b.days - a.days);
+    const roleCounts = {};
+    activeMembers.forEach((m) => { if (m.customRole) roleCounts[m.customRole] = (roleCounts[m.customRole] || 0) + 1; });
+    const roleRows = Object.entries(roleCounts).sort((a, b) => b[1] - a[1]);
 
     const attendCounts = {}, noShowCounts = {};
     participation.forEach((p) => {
@@ -1033,7 +1088,7 @@ export default function App() {
     const recentEvents = [...events].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10).map((ev) => {
       const rows = participation.filter((p) => p.eventId === ev.id);
       const attended = rows.filter((p) => p.attended).length;
-      const rate = activeOnly.length > 0 ? Math.round((attended / activeOnly.length) * 100) : 0;
+      const rate = activeMembers.length > 0 ? Math.round((attended / activeMembers.length) * 100) : 0;
       return { Date: ev.date, Event: ev.name + (ev.session ? ` (${ev.session})` : ""), "Signed up": rows.filter((p) => p.signedUp).length, Attended: attended, "Turnout %": rate };
     });
 
@@ -1043,13 +1098,11 @@ export default function App() {
       [],
       ["Alliance snapshot"],
       ["Total members", activeMembers.length],
-      ["Active", activeOnly.length],
-      ["Inactive", activeMembers.filter((m) => m.status === "inactive").length],
-      ["At-risk (quiet " + threshold + "+ days)", atRisk.length],
       ["Total events logged", events.length],
+      ["Leavers on file", leaverCount],
       [],
-      ["Members to check on (days silent)"],
-      ...(atRisk.length ? atRisk.slice(0, 15).map((r) => [r.name, r.days]) : [["None — everyone's accounted for"]]),
+      ["Custom roles"],
+      ...(roleRows.length ? roleRows.map(([role, n]) => [role, n]) : [["No custom roles assigned yet"]]),
       [],
       ["Most reliable attendees (events attended)"],
       ...(topAttendees.length ? topAttendees.map((r) => [r.name, r.n]) : [["No attendance logged yet"]]),
@@ -1130,6 +1183,15 @@ export default function App() {
   }
   if (!session) return <Login />;
   if (loading) return <div className="wsc" style={{ alignItems: "center", justifyContent: "center", minHeight: 300 }}><style>{STYLE}</style><div style={{ color: "var(--steel)", fontSize: 13 }}>Loading alliance data…</div></div>;
+  if (loadError) return (
+    <div className="wsc" style={{ alignItems: "center", justifyContent: "center", minHeight: 300 }}>
+      <style>{STYLE}</style>
+      <div style={{ textAlign: "center", maxWidth: 320 }}>
+        <div style={{ color: "var(--danger)", fontSize: 13, marginBottom: 12 }}>{loadError}</div>
+        <button className="wsc-btn wsc-btn-primary" onClick={() => window.location.reload()}>Retry</button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="wsc">
