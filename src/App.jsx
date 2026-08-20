@@ -4,7 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import {
   LayoutDashboard, Users, TrendingUp, CalendarDays, Plus, X, Pencil,
   Trash2, Snowflake, Search, Settings, Save,
-  ArrowUp, ArrowDown, Minus, Check, UserX, RotateCcw, Ban, Download, Upload, LogOut, Zap
+  ArrowUp, ArrowDown, Minus, Check, UserX, RotateCcw, Ban, Download, Upload, LogOut, Zap, CheckSquare
 } from "lucide-react";
 import { supabase } from "./supabaseClient.js";
 import Login from "./Login.jsx";
@@ -93,9 +93,10 @@ const STYLE = `
 .wsc { --bg:#0B1420; --bg-elev:#0F1C2C; --panel:#132234; --panel-2:#18293C;
   --border:#24384C; --border-soft:#1B2C3E; --frost:#6FCBEA; --frost-dim:#3E6E85;
   --white:#E9F3F7; --steel:#8397AA; --steel-dim:#5C7086; --amber:#E8A33D;
-  --danger:#E2604F; --success:#5FBF8C; --font-display: Arial, "Helvetica Neue", sans-serif;
-  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --danger:#E2604F; --success:#5FBF8C;
+  --font-display: "Segoe UI Semibold", "SF Pro Display", -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   background:var(--bg); color:var(--white); font-family:var(--font-body);
   min-height:100vh; overflow:hidden; border:none; border-radius:0;
   display:flex; }
@@ -105,71 +106,72 @@ const STYLE = `
 .wsc-brand { display:flex; align-items:center; gap:8px; padding:4px 8px 18px 8px; }
 .wsc-brand-mark { width:26px; height:26px; border-radius:7px; background:linear-gradient(180deg,var(--frost),var(--frost-dim));
   display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-.wsc-brand-text { font-family:var(--font-display); font-weight:700; font-size:13px; letter-spacing:0.06em;
+.wsc-brand-text { font-family:var(--font-display); font-weight:700; font-size:14px; letter-spacing:0.06em;
   text-transform:uppercase; line-height:1.2; }
-.wsc-brand-sub { font-size:10px; color:var(--steel-dim); letter-spacing:0.04em; }
+.wsc-brand-sub { font-size:11px; color:var(--steel-dim); letter-spacing:0.04em; }
 .wsc-brand-mobile { display:none; align-items:center; gap:6px; font-family:var(--font-display); font-weight:700;
-  font-size:11px; color:var(--frost); letter-spacing:0.04em; text-transform:uppercase; margin-bottom:2px; }
+  font-size:12px; color:var(--frost); letter-spacing:0.04em; text-transform:uppercase; margin-bottom:2px; }
 .wsc-nav-btn { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:8px; border:none;
-  background:transparent; color:var(--steel); font-size:13px; font-weight:500; cursor:pointer; text-align:left;
+  background:transparent; color:var(--steel); font-size:14px; font-weight:500; cursor:pointer; text-align:left;
   font-family:var(--font-body); transition:background .12s,color .12s; }
 .wsc-nav-btn:hover { background:var(--panel-2); color:var(--white); }
 .wsc-nav-btn.active { background:var(--panel-2); color:var(--frost); box-shadow:inset 2px 0 0 var(--frost); }
-.wsc-nav-count { margin-left:auto; font-family:var(--font-mono); font-size:10.5px; color:var(--steel-dim); }
+.wsc-nav-count { margin-left:auto; font-family:var(--font-mono); font-size:11.5px; color:var(--steel-dim); }
 .wsc-main { flex:1; min-width:0; display:flex; flex-direction:column; }
 .wsc-topbar { padding:14px 22px; border-bottom:1px solid var(--border-soft); display:flex; align-items:center;
   justify-content:space-between; gap:12px; flex-shrink:0; }
-.wsc-title { font-family:var(--font-display); font-size:16px; font-weight:700; letter-spacing:0.02em; }
-.wsc-title-sub { font-size:11px; color:var(--steel-dim); margin-top:2px; }
+.wsc-title { font-family:var(--font-display); font-size:17.5px; font-weight:700; letter-spacing:0.02em; }
+.wsc-title-sub { font-size:12px; color:var(--steel-dim); margin-top:2px; }
 .wsc-body { flex:1; overflow-y:auto; padding:20px 22px 28px; }
 .wsc-card { background:var(--panel); border:1px solid var(--border-soft); border-radius:11px; padding:16px 18px; }
 .wsc-grid { display:grid; gap:12px; }
-.wsc-stat-label { font-size:11px; color:var(--steel-dim); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; }
-.wsc-stat-val { font-family:var(--font-mono); font-size:24px; font-weight:600; color:var(--white); }
+.wsc-stat-label { font-size:12px; color:var(--steel-dim); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; }
+.wsc-stat-val { font-family:var(--font-mono); font-size:26px; font-weight:600; color:var(--white); }
 .wsc-btn { display:inline-flex; align-items:center; gap:6px; padding:8px 13px; border-radius:8px;
-  border:1px solid var(--border); background:var(--panel-2); color:var(--white); font-size:12.5px; font-weight:600;
+  border:1px solid var(--border); background:var(--panel-2); color:var(--white); font-size:13.5px; font-weight:600;
   cursor:pointer; font-family:var(--font-body); transition:border-color .12s,background .12s; white-space:nowrap; }
 .wsc-btn:hover { border-color:var(--frost-dim); }
 .wsc-btn-primary { background:var(--frost); color:#08202C; border-color:var(--frost); }
 .wsc-btn-primary:hover { background:#8AD6EE; }
 .wsc-btn-danger { background:transparent; color:var(--danger); border-color:#4A2A26; }
 .wsc-btn-danger:hover { background:#251616; border-color:var(--danger); }
-.wsc-btn-sm { padding:5px 9px; font-size:11.5px; }
+.wsc-btn-sm { padding:5px 9px; font-size:12.5px; }
 .wsc-btn-icon { padding:7px; }
 .wsc-input, .wsc-select, .wsc-textarea { width:100%; background:var(--bg-elev); border:1px solid var(--border);
-  color:var(--white); border-radius:7px; padding:8px 10px; font-size:13px; font-family:var(--font-body); }
+  color:var(--white); border-radius:7px; padding:8px 10px; font-size:14px; font-family:var(--font-body); }
 .wsc-input:focus, .wsc-select:focus, .wsc-textarea:focus { outline:none; border-color:var(--frost-dim); }
-.wsc-label { font-size:11px; color:var(--steel); margin-bottom:5px; display:block; font-weight:600;
+.wsc-label { font-size:12px; color:var(--steel); margin-bottom:5px; display:block; font-weight:600;
   text-transform:uppercase; letter-spacing:0.04em; }
 .wsc-field { margin-bottom:12px; }
-.wsc-table { width:100%; border-collapse:collapse; font-size:13px; }
-.wsc-table th { text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:0.05em;
+.wsc-table { width:100%; border-collapse:collapse; font-size:14px; }
+.wsc-table th { text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:0.05em;
   color:var(--steel-dim); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--border-soft); }
 .wsc-table td { padding:9px 10px; border-bottom:1px solid var(--border-soft); vertical-align:middle; }
 .wsc-table tr:last-child td { border-bottom:none; }
 .wsc-table tr:hover td { background:var(--panel-2); }
 .wsc-badge { display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:20px;
-  font-size:11px; font-weight:700; font-family:var(--font-mono); }
+  font-size:12px; font-weight:700; font-family:var(--font-mono); }
 .wsc-modal-wrap { position:fixed; inset:0; background:rgba(4,10,16,0.72); display:flex; align-items:center;
   justify-content:center; z-index:50; padding:20px; }
 .wsc-modal { background:var(--panel); border:1px solid var(--border); border-radius:13px; padding:22px;
   width:100%; max-width:460px; max-height:85vh; overflow-y:auto; }
 .wsc-modal.wide { max-width:640px; }
-.wsc-modal h3 { font-family:var(--font-display); font-size:15px; margin:0 0 16px; letter-spacing:0.02em; }
+.wsc-modal h3 { font-family:var(--font-display); font-size:16px; margin:0 0 16px; letter-spacing:0.02em; }
 .wsc-empty { text-align:center; padding:40px 20px; color:var(--steel-dim); }
-.wsc-empty-title { color:var(--steel); font-weight:600; margin-bottom:4px; font-size:14px; }
+.wsc-empty-title { color:var(--steel); font-weight:600; margin-bottom:4px; font-size:15px; }
 .wsc-search { display:flex; align-items:center; gap:8px; background:var(--bg-elev); border:1px solid var(--border);
   border-radius:8px; padding:0 10px; }
-.wsc-search input { border:none; background:transparent; padding:8px 0; font-size:13px; color:var(--white); flex:1; }
+.wsc-search input { border:none; background:transparent; padding:8px 0; font-size:14px; color:var(--white); flex:1; }
 .wsc-search input:focus { outline:none; }
-.wsc-pill { font-size:10.5px; padding:2px 8px; border-radius:20px; font-weight:700; letter-spacing:0.02em; }
-.wsc-role-badge { display:inline-block; padding:2px 9px; border-radius:20px; font-size:10.5px; font-weight:700;
+.wsc-pill { font-size:11.5px; padding:2px 8px; border-radius:20px; font-weight:700; letter-spacing:0.02em; }
+.wsc-role-badge { display:inline-flex; align-items:center; padding:3px 9px; border-radius:20px; font-size:11.5px; font-weight:700;
+  line-height:1; font-family:var(--font-mono); vertical-align:middle;
   letter-spacing:0.03em; text-transform:uppercase; border:1px solid; background:rgba(255,255,255,0.02); }
 .wsc-checkbox { width:15px; height:15px; accent-color:var(--frost); cursor:pointer; }
 .wsc-bulk-bar { display:flex; align-items:center; gap:10px; background:#6FCBEA14; border:1px solid var(--frost-dim);
-  border-radius:8px; padding:8px 12px; margin-bottom:12px; font-size:12.5px; color:var(--frost); }
+  border-radius:8px; padding:8px 12px; margin-bottom:12px; font-size:13.5px; color:var(--frost); }
 .wsc-class-block { border:1px solid var(--border-soft); border-radius:9px; padding:10px 12px; margin-bottom:10px; }
-.wsc-class-title { font-size:12px; font-weight:700; color:var(--frost); margin-bottom:8px; }
+.wsc-class-title { font-size:13px; font-weight:700; color:var(--frost); margin-bottom:8px; }
 .wsc-scroll::-webkit-scrollbar { width:8px; height:8px; }
 .wsc-scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:8px; }
 .wsc-grid-hero { display:grid; gap:12px; grid-template-columns: 220px 1fr; align-items:stretch; }
@@ -189,7 +191,7 @@ const STYLE = `
     border-top:1px solid var(--border-soft); padding:6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
     z-index:40; justify-content:space-around; }
   .wsc-bottomnav-btn { display:flex; flex-direction:column; align-items:center; gap:2px; background:none;
-    border:none; color:var(--steel); font-size:10px; font-family:var(--font-body); padding:4px 8px; cursor:pointer;
+    border:none; color:var(--steel); font-size:11px; font-family:var(--font-body); padding:4px 8px; cursor:pointer;
     position:relative; flex:1; }
   .wsc-bottomnav-btn.active { color:var(--frost); }
   .wsc-bottomnav-count { position:absolute; top:-2px; right:14px; background:var(--danger); color:#fff;
@@ -232,7 +234,7 @@ function Modal({ title, onClose, children, wide }) {
   );
 }
 function EmptyState({ title, body }) {
-  return <div className="wsc-empty"><div className="wsc-empty-title">{title}</div><div style={{ fontSize: 12.5 }}>{body}</div></div>;
+  return <div className="wsc-empty"><div className="wsc-empty-title">{title}</div><div style={{ fontSize: 13.5 }}>{body}</div></div>;
 }
 function ReadinessGauge({ score }) {
   const color = score >= 70 ? "#5FBF8C" : score >= 40 ? "#E8A33D" : "#E2604F";
@@ -320,7 +322,7 @@ function ConfigModal({ config, onClose, onSave, onExportExcel, onExportSummary, 
         <input className="wsc-input" value={leader} onChange={(e) => setLeader(e.target.value)} placeholder="e.g. Chief Frost" /></div>
       <div className="wsc-field"><label className="wsc-label">Leaver data retention (days)</label>
         <input className="wsc-input" type="number" min="1" value={retention} onChange={(e) => setRetention(Number(e.target.value))} />
-        <div style={{ fontSize: 11.5, color: "var(--steel-dim)", marginTop: 5 }}>Members marked "left" stay on the Leavers tab this long, then are wiped on next load.</div></div>
+        <div style={{ fontSize: 12.5, color: "var(--steel-dim)", marginTop: 5 }}>Members marked "left" stay on the Leavers tab this long, then are wiped on next load.</div></div>
       <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "flex-end" }}>
         <button className="wsc-btn" onClick={onClose}>Cancel</button>
         <button className="wsc-btn wsc-btn-primary" onClick={() => onSave({ allianceName: name, leaderName: leader, inactivityDays: config.inactivityDays ?? 10, leaverRetentionDays: retention })}><Save size={13} /> Save</button>
@@ -334,7 +336,7 @@ function ConfigModal({ config, onClose, onSave, onExportExcel, onExportSummary, 
           <button className="wsc-btn wsc-btn-sm" onClick={handleImportClick}><Upload size={12} /> Import backup</button>
           <input ref={fileRef} type="file" accept="application/json" style={{ display: "none" }} onChange={handleFileChange} />
         </div>
-        <div style={{ fontSize: 11.5, color: "var(--steel-dim)" }}>
+        <div style={{ fontSize: 12.5, color: "var(--steel-dim)" }}>
           Full data is every row, raw. Summary is a one-page digest — snapshot stats, who's reliable, who's not, troop spread, recent turnout — meant for sharing with officers who don't need the raw tables. The .json backup is a full, exact copy of everything here — use it to restore into this app later, or as a record if you ever move off Claude.
           {importMsg && <div style={{ color: "var(--frost)", marginTop: 6 }}>{importMsg}</div>}
         </div>
@@ -367,7 +369,7 @@ function MemberModal({ member, onClose, onSave, onDelete }) {
       <div style={{ display: "flex", gap: 10 }}>
         <div className="wsc-field" style={{ flex: 1 }}><label className="wsc-label">Join date</label>
           <input className="wsc-input" type="date" value={form.joinDate} onChange={(e) => set("joinDate", e.target.value)} />
-          <div style={{ fontSize: 11, color: "var(--steel-dim)", marginTop: 4 }}>Blank by default — set it if you know it, otherwise tenure just shows "Unknown" instead of guessing.</div></div>
+          <div style={{ fontSize: 12, color: "var(--steel-dim)", marginTop: 4 }}>Blank by default — set it if you know it, otherwise tenure just shows "Unknown" instead of guessing.</div></div>
         {isLeft && (
           <div className="wsc-field" style={{ flex: 1 }}><label className="wsc-label">Left date</label>
             <input className="wsc-input" type="date" value={form.leftDate} onChange={(e) => set("leftDate", e.target.value)} /></div>
@@ -375,7 +377,7 @@ function MemberModal({ member, onClose, onSave, onDelete }) {
       </div>
       <div className="wsc-field" style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <input type="checkbox" className="wsc-checkbox" id="left-toggle" checked={isLeft} onChange={(e) => toggleLeft(e.target.checked)} />
-        <label htmlFor="left-toggle" style={{ fontSize: 12.5, color: "var(--steel)", cursor: "pointer" }}>This member has left the alliance</label>
+        <label htmlFor="left-toggle" style={{ fontSize: 13.5, color: "var(--steel)", cursor: "pointer" }}>This member has left the alliance</label>
       </div>
       <div className="wsc-field"><label className="wsc-label">Notes</label>
         <textarea className="wsc-textarea" rows={2} value={form.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Timezone, anything worth remembering" /></div>
@@ -396,7 +398,7 @@ function BulkLeaveModal({ count, onClose, onConfirm }) {
     <Modal title={`Mark ${count} member${count > 1 ? "s" : ""} as left`} onClose={onClose}>
       <div className="wsc-field"><label className="wsc-label">Left date (applied to all selected)</label>
         <input className="wsc-input" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
-      <div style={{ fontSize: 11.5, color: "var(--steel-dim)", marginBottom: 10 }}>They'll move to the Leavers tab and drop off active tracking.</div>
+      <div style={{ fontSize: 12.5, color: "var(--steel-dim)", marginBottom: 10 }}>They'll move to the Leavers tab and drop off active tracking.</div>
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
         <button className="wsc-btn" onClick={onClose}>Cancel</button>
         <button className="wsc-btn wsc-btn-primary" onClick={() => onConfirm(date)}><Save size={13} /> Confirm</button>
@@ -427,7 +429,7 @@ function EndgameProgressChart({ members, growth }) {
         <div className="wsc-stat-label" style={{ margin: 0 }}>Endgame troop progress</div>
         <div style={{ display: "flex", gap: 12 }}>
           {CLASSES.map((c) => (
-            <div key={c.key} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--steel)" }}>
+            <div key={c.key} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--steel)" }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: CLASS_COLORS[c.key], display: "inline-block" }} />{c.label}
             </div>
           ))}
@@ -516,7 +518,7 @@ function Dashboard({ members, growth, events, participation, config }) {
       <div className="wsc-grid-hero">
         <div className="wsc-card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6 }}>
           <ReadinessGauge score={isNaN(readiness) ? 0 : readiness} />
-          <div style={{ fontSize: 11, color: "var(--steel-dim)", textAlign: "center" }}>{latestEvent ? "Turnout at the most recent event." : "Log an event to see turnout here."}</div>
+          <div style={{ fontSize: 12, color: "var(--steel-dim)", textAlign: "center" }}>{latestEvent ? "Turnout at the most recent event." : "Log an event to see turnout here."}</div>
         </div>
         <EndgameProgressChart members={activeMembers} growth={growth} />
       </div>
@@ -544,10 +546,47 @@ function Dashboard({ members, growth, events, participation, config }) {
     </div>
   );
 }
+const RANKS_DESC = [...RANKS].reverse();
+function RankGroup({ rank, list, selectMode, selected, onToggleOne, onToggleAllInGroup, onEdit, lastActivityByMember }) {
+  const allSelected = list.length > 0 && list.every((m) => selected.has(m.id));
+  return (
+    <div className="wsc-card" style={{ padding: 0, overflow: "hidden", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: "1px solid var(--border-soft)" }}>
+        <RankBadge rank={rank} />
+        <span style={{ fontSize: 13, color: "var(--steel-dim)" }}>{list.length} member{list.length !== 1 ? "s" : ""}</span>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table className="wsc-table">
+          <thead><tr>
+            {selectMode && <th style={{ width: 30 }}><input type="checkbox" className="wsc-checkbox" checked={allSelected} onChange={() => onToggleAllInGroup(list)} /></th>}
+            <th>Name</th><th>Role</th><th>Joined</th><th>Tenure</th><th>Last activity</th><th></th>
+          </tr></thead>
+          <tbody>
+            {list.map((m) => {
+              const last = lastActivityByMember[m.id];
+              return (
+                <tr key={m.id}>
+                  {selectMode && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" className="wsc-checkbox" checked={selected.has(m.id)} onChange={() => onToggleOne(m.id)} /></td>}
+                  <td style={{ fontWeight: 600, cursor: "pointer" }} onClick={() => onEdit(m)}>{m.name}</td>
+                  <td><RoleBadge label={m.customRole} /></td>
+                  <td style={{ color: "var(--steel)" }}>{m.joinDate ? fmtDate(m.joinDate) : "Unknown"}</td>
+                  <td style={{ color: "var(--steel)", fontFamily: "var(--font-mono)" }}><TenureLabel joinDate={m.joinDate} /></td>
+                  <td style={{ color: "var(--steel)" }}>{last ? fmtDate(last) : "No data"}</td>
+                  <td style={{ textAlign: "right", cursor: "pointer" }} onClick={() => onEdit(m)}><Pencil size={13} color="var(--steel-dim)" /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 function RosterTab({ members, lastActivityByMember, onEdit, onBulkLeave }) {
   const [query, setQuery] = useState("");
   const [rankFilter, setRankFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("all");
+  const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [showBulk, setShowBulk] = useState(false);
   const roster = members.filter((m) => m.status !== "left");
@@ -558,8 +597,15 @@ function RosterTab({ members, lastActivityByMember, onEdit, onBulkLeave }) {
     const matchesRole = roleFilter === "all" || m.customRole === roleFilter;
     return matchesQuery && matchesRank && matchesRole;
   });
+  const groups = useMemo(() => RANKS_DESC.map((rank) => ({ rank, list: filtered.filter((m) => m.rank === rank) })).filter((g) => g.list.length > 0), [filtered]);
   const toggleOne = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const toggleAll = () => setSelected((s) => s.size === filtered.length ? new Set() : new Set(filtered.map((m) => m.id)));
+  const toggleAllInGroup = (list) => setSelected((s) => {
+    const n = new Set(s);
+    const allIn = list.every((m) => n.has(m.id));
+    list.forEach((m) => allIn ? n.delete(m.id) : n.add(m.id));
+    return n;
+  });
+  const exitSelectMode = () => { setSelectMode(false); setSelected(new Set()); };
   return (
     <div>
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
@@ -570,44 +616,31 @@ function RosterTab({ members, lastActivityByMember, onEdit, onBulkLeave }) {
         <select className="wsc-select" style={{ width: 120 }} value={rankFilter} onChange={(e) => setRankFilter(e.target.value)}>
           <option value="all">All ranks</option>{RANKS.map((r) => <option key={r} value={r}>{r}</option>)}
         </select>
+        {!selectMode ? (
+          <button className="wsc-btn wsc-btn-sm" onClick={() => setSelectMode(true)}><CheckSquare size={13} /> Select</button>
+        ) : (
+          <button className="wsc-btn wsc-btn-sm" onClick={exitSelectMode}><X size={13} /> Cancel</button>
+        )}
       </div>
-      {selected.size > 0 && (
+      {selectMode && selected.size > 0 && (
         <div className="wsc-bulk-bar">
           <span>{selected.size} selected</span>
           <button className="wsc-btn wsc-btn-sm" onClick={() => setShowBulk(true)}><UserX size={12} /> Mark as left</button>
           <button className="wsc-btn wsc-btn-sm" onClick={() => setSelected(new Set())}>Clear</button>
         </div>
       )}
-      <div className="wsc-card" style={{ padding: 0, overflow: "hidden" }}>
-        {roster.length === 0 ? <EmptyState title="No members yet" body='Add your first chief with "Add member" above to start the roster.' />
-          : filtered.length === 0 ? <EmptyState title="No matches" body="Try a different search or filter." /> : (
-          <div style={{ overflowX: "auto" }}>
-            <table className="wsc-table">
-              <thead><tr><th style={{ width: 30 }}><input type="checkbox" className="wsc-checkbox" checked={selected.size === filtered.length && filtered.length > 0} onChange={toggleAll} /></th>
-                <th>Name</th><th>Rank</th><th>Role</th><th>Joined</th><th>Tenure</th><th>Last activity</th><th></th></tr></thead>
-              <tbody>
-                {filtered.map((m) => {
-                  const last = lastActivityByMember[m.id];
-                  return (
-                    <tr key={m.id}>
-                      <td onClick={(e) => e.stopPropagation()}><input type="checkbox" className="wsc-checkbox" checked={selected.has(m.id)} onChange={() => toggleOne(m.id)} /></td>
-                      <td style={{ fontWeight: 600, cursor: "pointer" }} onClick={() => onEdit(m)}>{m.name}</td>
-                      <td><RankBadge rank={m.rank} /></td>
-                      <td><RoleBadge label={m.customRole} /></td>
-                      <td style={{ color: "var(--steel)" }}>{m.joinDate ? fmtDate(m.joinDate) : "Unknown"}</td>
-                      <td style={{ color: "var(--steel)", fontFamily: "var(--font-mono)" }}><TenureLabel joinDate={m.joinDate} /></td>
-                      <td style={{ color: "var(--steel)" }}>{last ? fmtDate(last) : "No data"}</td>
-                      <td style={{ textAlign: "right", cursor: "pointer" }} onClick={() => onEdit(m)}><Pencil size={13} color="var(--steel-dim)" /></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      {roster.length === 0 ? (
+        <div className="wsc-card"><EmptyState title="No members yet" body='Add your first chief with "Add member" above to start the roster.' /></div>
+      ) : groups.length === 0 ? (
+        <div className="wsc-card"><EmptyState title="No matches" body="Try a different search or filter." /></div>
+      ) : (
+        groups.map((g) => (
+          <RankGroup key={g.rank} rank={g.rank} list={g.list} selectMode={selectMode} selected={selected}
+            onToggleOne={toggleOne} onToggleAllInGroup={toggleAllInGroup} onEdit={onEdit} lastActivityByMember={lastActivityByMember} />
+        ))
+      )}
       {showBulk && <BulkLeaveModal count={selected.size} onClose={() => setShowBulk(false)}
-        onConfirm={(date) => { onBulkLeave([...selected], date); setSelected(new Set()); setShowBulk(false); }} />}
+        onConfirm={(date) => { onBulkLeave([...selected], date); setSelected(new Set()); setShowBulk(false); exitSelectMode(); }} />}
     </div>
   );
 }
@@ -615,7 +648,7 @@ function LeaversTab({ members, retentionDays, onReactivate, onPurgeNow, onEdit }
   const leavers = members.filter((m) => m.status === "left").sort((a, b) => (b.leftDate || "").localeCompare(a.leftDate || ""));
   return (
     <div>
-      <div className="wsc-card" style={{ marginBottom: 14, fontSize: 12, color: "var(--steel)" }}>
+      <div className="wsc-card" style={{ marginBottom: 14, fontSize: 13, color: "var(--steel)" }}>
         Members marked "Left alliance" land here. Their history stays for {retentionDays} days after leaving, then is wiped automatically the next time this app is opened.
       </div>
       <div className="wsc-card" style={{ padding: 0, overflow: "hidden" }}>
@@ -734,7 +767,7 @@ function GrowthTab({ members, growth, onEditMember }) {
     <div>
       {members.length === 0 ? <div className="wsc-card"><EmptyState title="Add members first" body="Growth tracking needs a roster — head to the Roster tab." /></div> : (
         <div className="wsc-card" style={{ padding: 0, overflow: "hidden" }}>
-          <div style={{ padding: "10px 18px 0", fontSize: 11.5, color: "var(--steel-dim)" }}>Click a row to update that member's profile.</div>
+          <div style={{ padding: "10px 18px 0", fontSize: 12.5, color: "var(--steel-dim)" }}>Click a row to update that member's profile.</div>
           <div style={{ overflowX: "auto" }}>
             <table className="wsc-table">
               <thead><tr><th>Member</th><th>Power</th><th>Change</th><th>Furnace</th><th>Infantry</th><th>Marksman</th><th>Lancer</th><th>Updated</th></tr></thead>
@@ -795,7 +828,7 @@ function EventDetail({ event, members, participation, onClose, onToggleSignUp, o
   const signedCount = Object.values(partMap).filter((p) => p.signedUp).length;
   return (
     <Modal title={`${event.name}${event.session ? ` · ${event.session}` : ""} — ${fmtDate(event.date)}`} onClose={onClose} wide>
-      <div style={{ fontSize: 12, color: "var(--steel-dim)", marginBottom: 10 }}>{signedCount} signed up · {attendedCount} attended</div>
+      <div style={{ fontSize: 13, color: "var(--steel-dim)", marginBottom: 10 }}>{signedCount} signed up · {attendedCount} attended</div>
       <div className="wsc-search" style={{ marginBottom: 10 }}><Search size={13} color="var(--steel-dim)" /><input placeholder="Search member" value={query} onChange={(e) => setQuery(e.target.value)} /></div>
       <div className="wsc-scroll" style={{ maxHeight: 380, overflowY: "auto", overflowX: "auto" }}>
         <table className="wsc-table" style={{ minWidth: 620 }}>
@@ -835,7 +868,7 @@ function EventsTab({ events, members, participation, onOpenEvent }) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginBottom: 14, gap: 8 }}>
-        <span style={{ fontSize: 11.5, color: "var(--steel-dim)" }}>Show</span>
+        <span style={{ fontSize: 12.5, color: "var(--steel-dim)" }}>Show</span>
         <select className="wsc-select" style={{ width: 190 }} value={filter} onChange={(e) => setFilter(e.target.value)}>
           <option value="all">All types</option>{EVENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
@@ -898,6 +931,19 @@ export default function App() {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
     return () => sub.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    // Recharts' auto-sizing containers can get stuck thinking they have zero
+    // width/height after a tab has been backgrounded, since nothing tells them
+    // to recalculate. Nudging a resize event on return fixes it.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        window.dispatchEvent(new Event("resize"));
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
 
   const userId = session?.user?.id || null;
@@ -1179,15 +1225,15 @@ export default function App() {
   }, [config]);
 
   if (session === undefined) {
-    return <div className="wsc" style={{ alignItems: "center", justifyContent: "center", minHeight: 300 }}><style>{STYLE}</style><div style={{ color: "var(--steel)", fontSize: 13 }}>Loading…</div></div>;
+    return <div className="wsc" style={{ alignItems: "center", justifyContent: "center", minHeight: 300 }}><style>{STYLE}</style><div style={{ color: "var(--steel)", fontSize: 14 }}>Loading…</div></div>;
   }
   if (!session) return <Login />;
-  if (loading) return <div className="wsc" style={{ alignItems: "center", justifyContent: "center", minHeight: 300 }}><style>{STYLE}</style><div style={{ color: "var(--steel)", fontSize: 13 }}>Loading alliance data…</div></div>;
+  if (loading) return <div className="wsc" style={{ alignItems: "center", justifyContent: "center", minHeight: 300 }}><style>{STYLE}</style><div style={{ color: "var(--steel)", fontSize: 14 }}>Loading alliance data…</div></div>;
   if (loadError) return (
     <div className="wsc" style={{ alignItems: "center", justifyContent: "center", minHeight: 300 }}>
       <style>{STYLE}</style>
       <div style={{ textAlign: "center", maxWidth: 320 }}>
-        <div style={{ color: "var(--danger)", fontSize: 13, marginBottom: 12 }}>{loadError}</div>
+        <div style={{ color: "var(--danger)", fontSize: 14, marginBottom: 12 }}>{loadError}</div>
         <button className="wsc-btn wsc-btn-primary" onClick={() => window.location.reload()}>Retry</button>
       </div>
     </div>
