@@ -275,6 +275,7 @@ function BottomNav({ tab, setTab, leaverCount }) {
 }
 function Sidebar({ tab, setTab, allianceName, leaderName, leaverCount }) {
   const items = [
+    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "roster", label: "Roster", icon: Users },
     { id: "leavers", label: "Leavers", icon: UserX, count: leaverCount },
     { id: "growth", label: "Growth", icon: TrendingUp },
