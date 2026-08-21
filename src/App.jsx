@@ -61,9 +61,11 @@ const TenureLabel = ({ joinDate, endDate }) => {
 const SKILL_LABELS = ["No skill", "1st skill", "2nd skill", "3rd skill"];
 const classSummary = (cls) => {
   if (!cls) return "—";
-  if (cls.fcTroopLevel) return cls.fcTroopLevel;
-  if (cls.troopTier === "T12") return `T12 (${SKILL_LABELS[cls.t12Skills || 0]})`;
-  return cls.troopTier || "—";
+  const tierPart = cls.troopTier === "T12" ? `T12 (${SKILL_LABELS[cls.t12Skills || 0]})` : (cls.troopTier || "");
+  const fcPart = cls.fcTroopLevel || "";
+  if (!tierPart && !fcPart) return "—";
+  if (tierPart && fcPart) return `${tierPart} · ${fcPart}`;
+  return tierPart || fcPart;
 };
 
 // ---------------------------------------------------------------- data layer (Supabase)
@@ -85,8 +87,8 @@ async function fetchAllData() {
     supabase.from("participation").select("*"),
   ]);
   const config = settingsRes.data
-    ? { allianceName: settingsRes.data.alliance_name || "", leaderName: settingsRes.data.leader_name || "", inactivityDays: settingsRes.data.inactivity_days ?? 10, leaverRetentionDays: settingsRes.data.leaver_retention_days ?? 90 }
-    : { allianceName: "", leaderName: "", inactivityDays: 10, leaverRetentionDays: 90 };
+    ? { allianceName: settingsRes.data.alliance_name || "", leaderName: settingsRes.data.leader_name || "", inactivityDays: settingsRes.data.inactivity_days ?? 10, leaverRetentionDays: settingsRes.data.leaver_retention_days ?? 90, rankLabels: settingsRes.data.rank_labels || {} }
+    : { allianceName: "", leaderName: "", inactivityDays: 10, leaverRetentionDays: 90, rankLabels: {} };
   return {
     config,
     members: (membersRes.data || []).map(rowToMember),
@@ -218,10 +220,10 @@ const STYLE = `
 .wsc-power-sub { font-size:12.5px; color:var(--steel-dim); margin-top:2px; }
 `;
 
-function RankBadge({ rank }) {
+function RankBadge({ rank, label }) {
   const colors = { R5: "#F2C94C", R4: "#6FCBEA", R3: "#8397AA", R2: "#5C7086", R1: "#3E4E5E" };
   const c = colors[rank] || "#5C7086";
-  return <span className="wsc-badge" style={{ background: `${c}22`, color: c }}>{rank}</span>;
+  return <span className="wsc-badge" style={{ background: `${c}22`, color: c }}>{label || rank}</span>;
 }
 const NEON_COLORS = ["#39FF88", "#00E5FF", "#FF3EC8", "#FFD23F", "#B14EFF", "#FF5F5F", "#4EFFE0"];
 const roleColor = (label) => {
@@ -321,8 +323,10 @@ function ConfigModal({ config, onClose, onSave, onExportExcel, onExportSummary, 
   const [name, setName] = useState(config.allianceName || "");
   const [leader, setLeader] = useState(config.leaderName || "");
   const [retention, setRetention] = useState(config.leaverRetentionDays ?? 90);
+  const [rankLabels, setRankLabels] = useState({ ...(config.rankLabels || {}) });
   const [importMsg, setImportMsg] = useState("");
   const fileRef = useRef(null);
+  const setRankLabel = (rank, val) => setRankLabels((r) => ({ ...r, [rank]: val }));
 
   const handleImportClick = () => fileRef.current?.click();
   const handleFileChange = async (e) => {
@@ -343,9 +347,19 @@ function ConfigModal({ config, onClose, onSave, onExportExcel, onExportSummary, 
       <div className="wsc-field"><label className="wsc-label">Leaver data retention (days)</label>
         <input className="wsc-input" type="number" min="1" value={retention} onChange={(e) => setRetention(Number(e.target.value))} />
         <div style={{ fontSize: 12.5, color: "var(--steel-dim)", marginTop: 5 }}>Members marked "left" stay on the Leavers tab this long, then are wiped on next load.</div></div>
+      <div className="wsc-field">
+        <label className="wsc-label">Rank labels (optional)</label>
+        <div style={{ fontSize: 12, color: "var(--steel-dim)", marginBottom: 8 }}>Give R1–R5 a custom display name (e.g. R5 → "Alliance Leader"). Leave blank to just show "R5".</div>
+        {RANKS_DESC.map((r) => (
+          <div key={r} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <RankBadge rank={r} />
+            <input className="wsc-input" style={{ flex: 1 }} value={rankLabels[r] || ""} onChange={(e) => setRankLabel(r, e.target.value)} placeholder={r} />
+          </div>
+        ))}
+      </div>
       <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "flex-end" }}>
         <button className="wsc-btn" onClick={onClose}>Cancel</button>
-        <button className="wsc-btn wsc-btn-primary" onClick={() => onSave({ allianceName: name, leaderName: leader, inactivityDays: config.inactivityDays ?? 10, leaverRetentionDays: retention })}><Save size={13} /> Save</button>
+        <button className="wsc-btn wsc-btn-primary" onClick={() => onSave({ allianceName: name, leaderName: leader, inactivityDays: config.inactivityDays ?? 10, leaverRetentionDays: retention, rankLabels })}><Save size={13} /> Save</button>
       </div>
       <div style={{ borderTop: "1px solid var(--border-soft)", marginTop: 20, paddingTop: 16 }}>
         <label className="wsc-label">Data</label>
@@ -582,19 +596,28 @@ function Dashboard({ members, growth, events, participation, config }) {
   );
 }
 const RANKS_DESC = [...RANKS].reverse();
-function RankGroup({ rank, list, selectMode, selected, onToggleOne, onToggleAllInGroup, onEdit, lastActivityByMember, powerByMember }) {
+const ROSTER_COLS = [
+  { key: "role", label: "Role", width: 130, align: "center" },
+  { key: "power", label: "Power", width: 130, align: "right" },
+  { key: "joined", label: "Joined", width: 120, align: "center" },
+  { key: "tenure", label: "Tenure", width: 100, align: "center" },
+  { key: "last", label: "Last activity", width: 130, align: "center" },
+];
+function RankGroup({ rank, rankLabel, list, selectMode, selected, onToggleOne, onToggleAllInGroup, onEdit, lastActivityByMember, powerByMember }) {
   const allSelected = list.length > 0 && list.every((m) => selected.has(m.id));
   return (
     <div className="wsc-card" style={{ padding: 0, overflow: "hidden", marginBottom: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: "1px solid var(--border-soft)" }}>
-        <RankBadge rank={rank} />
+        <RankBadge rank={rank} label={rankLabel} />
         <span style={{ fontSize: 13, color: "var(--steel-dim)" }}>{list.length} member{list.length !== 1 ? "s" : ""}</span>
       </div>
       <div style={{ overflowX: "auto" }}>
-        <table className="wsc-table">
+        <table className="wsc-table" style={{ tableLayout: "fixed", width: "100%" }}>
           <thead><tr>
             {selectMode && <th style={{ width: 30 }}><input type="checkbox" className="wsc-checkbox" checked={allSelected} onChange={() => onToggleAllInGroup(list)} /></th>}
-            <th>Name</th><th>Role</th><th>Power</th><th>Joined</th><th>Tenure</th><th>Last activity</th><th></th>
+            <th>Name</th>
+            {ROSTER_COLS.map((c) => <th key={c.key} style={{ width: c.width, textAlign: c.align }}>{c.label}</th>)}
+            <th style={{ width: 36 }}></th>
           </tr></thead>
           <tbody>
             {list.map((m) => {
@@ -604,11 +627,11 @@ function RankGroup({ rank, list, selectMode, selected, onToggleOne, onToggleAllI
                 <tr key={m.id}>
                   {selectMode && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" className="wsc-checkbox" checked={selected.has(m.id)} onChange={() => onToggleOne(m.id)} /></td>}
                   <td style={{ fontWeight: 600, cursor: "pointer" }} onClick={() => onEdit(m)}>{m.name}</td>
-                  <td><RoleBadge label={m.customRole} /></td>
-                  <td style={{ fontFamily: "var(--font-mono)", color: "var(--steel)" }}>{power !== undefined && power !== "" ? fmtNum(power) : "—"}</td>
-                  <td style={{ color: "var(--steel)" }}>{m.joinDate ? fmtDate(m.joinDate) : "Unknown"}</td>
-                  <td style={{ color: "var(--steel)", fontFamily: "var(--font-mono)" }}><TenureLabel joinDate={m.joinDate} /></td>
-                  <td style={{ color: "var(--steel)" }}>{last ? fmtDate(last) : "No data"}</td>
+                  <td style={{ textAlign: "center" }}><RoleBadge label={m.customRole} /></td>
+                  <td style={{ fontFamily: "var(--font-mono)", color: "var(--steel)", textAlign: "right" }}>{power !== undefined && power !== "" ? fmtNum(power) : "—"}</td>
+                  <td style={{ color: "var(--steel)", textAlign: "center" }}>{m.joinDate ? fmtDate(m.joinDate) : "Unknown"}</td>
+                  <td style={{ color: "var(--steel)", fontFamily: "var(--font-mono)", textAlign: "center" }}><TenureLabel joinDate={m.joinDate} /></td>
+                  <td style={{ color: "var(--steel)", textAlign: "center" }}>{last ? fmtDate(last) : "No data"}</td>
                   <td style={{ textAlign: "right", cursor: "pointer" }} onClick={() => onEdit(m)}><Pencil size={13} color="var(--steel-dim)" /></td>
                 </tr>
               );
@@ -619,7 +642,7 @@ function RankGroup({ rank, list, selectMode, selected, onToggleOne, onToggleAllI
     </div>
   );
 }
-function RosterTab({ members, growth, lastActivityByMember, onEdit, onBulkLeave }) {
+function RosterTab({ members, growth, lastActivityByMember, rankLabels, onEdit, onBulkLeave }) {
   const [query, setQuery] = useState("");
   const [rankFilter, setRankFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("all");
@@ -685,7 +708,7 @@ function RosterTab({ members, growth, lastActivityByMember, onEdit, onBulkLeave 
         <div className="wsc-card"><EmptyState title="No matches" body="Try a different search or filter." /></div>
       ) : (
         groups.map((g) => (
-          <RankGroup key={g.rank} rank={g.rank} list={g.list} selectMode={selectMode} selected={selected}
+          <RankGroup key={g.rank} rank={g.rank} rankLabel={rankLabels?.[g.rank]} list={g.list} selectMode={selectMode} selected={selected}
             onToggleOne={toggleOne} onToggleAllInGroup={toggleAllInGroup} onEdit={onEdit} lastActivityByMember={lastActivityByMember} powerByMember={powerByMember} />
         ))
       )}
@@ -694,7 +717,7 @@ function RosterTab({ members, growth, lastActivityByMember, onEdit, onBulkLeave 
     </div>
   );
 }
-function LeaversTab({ members, retentionDays, onReactivate, onPurgeNow, onEdit }) {
+function LeaversTab({ members, retentionDays, rankLabels, onReactivate, onPurgeNow, onEdit }) {
   const leavers = members.filter((m) => m.status === "left").sort((a, b) => (b.leftDate || "").localeCompare(a.leftDate || ""));
   return (
     <div>
@@ -714,7 +737,7 @@ function LeaversTab({ members, retentionDays, onReactivate, onPurgeNow, onEdit }
                     <tr key={m.id}>
                       <td style={{ fontWeight: 600, cursor: "pointer" }} onClick={() => onEdit(m)}>{m.name}</td>
                       <td style={{ color: "var(--steel-dim)" }}>{m.gameId || "—"}</td>
-                      <td><RankBadge rank={m.rank} /></td>
+                      <td><RankBadge rank={m.rank} label={rankLabels?.[m.rank]} /></td>
                       <td><RoleBadge label={m.customRole} /></td>
                       <td style={{ fontFamily: "var(--font-mono)" }}><TenureLabel joinDate={m.joinDate} endDate={m.leftDate} /></td>
                       <td style={{ color: "var(--steel)" }}>{fmtDate(m.leftDate)}</td>
@@ -900,7 +923,16 @@ const strategyPoints = (p) => {
   else if (p.strategy === "partial") pts += 1;
   return pts;
 };
-function EventDetail({ event, members, participation, onClose, onToggleSignUp, onToggleAttend, onTogglePartial, onScore, onNote, onSetStrategy }) {
+function ModeBadge({ mode }) {
+  const isStrategy = mode === "strategy";
+  const c = isStrategy ? "#B14EFF" : "#6FCBEA";
+  return (
+    <span className="wsc-role-badge" style={{ color: c, borderColor: c, boxShadow: `0 0 6px ${c}66, 0 0 1px ${c}`, marginLeft: 8 }}>
+      {isStrategy ? "Strategy" : "Score"}
+    </span>
+  );
+}
+function EventDetail({ event, members, participation, onClose, onDelete, onToggleSignUp, onToggleAttend, onTogglePartial, onScore, onNote, onSetStrategy }) {
   const [query, setQuery] = useState("");
   const isStrategy = event.mode === "strategy";
   const partMap = {};
@@ -912,21 +944,26 @@ function EventDetail({ event, members, participation, onClose, onToggleSignUp, o
     filtered = filtered.slice().sort((a, b) => strategyPoints(partMap[b.id]) - strategyPoints(partMap[a.id]));
   }
   let rankCounter = 0;
+  const handleDelete = () => {
+    if (window.confirm(`Delete "${event.name}${event.session ? ` · ${event.session}` : ""}" and all its participation data? This can't be undone.`)) onDelete(event.id);
+  };
   return (
     <Modal title={`${event.name}${event.session ? ` · ${event.session}` : ""} — ${fmtDate(event.date)}`} onClose={onClose} wide>
-      <div style={{ fontSize: 13, color: "var(--steel-dim)", marginBottom: 10 }}>
-        {signedCount} signed up · {attendedCount} attended
-        <span className="wsc-pill" style={{ background: isStrategy ? "#B14EFF22" : "#6FCBEA22", color: isStrategy ? "#B14EFF" : "var(--frost)", marginLeft: 8 }}>
-          {isStrategy ? "Strategy compliance" : "Score"}
-        </span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 13, color: "var(--steel-dim)" }}>
+          {isStrategy ? `${attendedCount} participated` : `${signedCount} signed up · ${attendedCount} attended`}
+          <ModeBadge mode={event.mode} />
+        </div>
+        <button className="wsc-btn wsc-btn-sm wsc-btn-danger" onClick={handleDelete}><Trash2 size={12} /> Delete event</button>
       </div>
       <div className="wsc-search" style={{ marginBottom: 10 }}><Search size={13} color="var(--steel-dim)" /><input placeholder="Search member" value={query} onChange={(e) => setQuery(e.target.value)} /></div>
       <div className="wsc-scroll" style={{ maxHeight: 380, overflowY: "auto", overflowX: "auto" }}>
-        <table className="wsc-table" style={{ minWidth: 620 }}>
+        <table className="wsc-table" style={{ minWidth: 560 }}>
           <thead><tr>
             {isStrategy && <th>Rank</th>}
-            <th>Member</th><th>Signed up</th><th>Attended</th><th>Full duration?</th>
-            {isStrategy ? <th>Strategy</th> : <th>Score</th>}
+            <th>Member</th>
+            {isStrategy ? <><th>Signed up</th><th>Attended</th><th>Full duration?</th><th>Strategy</th></> : <th>Participated</th>}
+            {!isStrategy && <th>Score</th>}
             <th>Notes</th>
           </tr></thead>
           <tbody>
@@ -938,29 +975,35 @@ function EventDetail({ event, members, participation, onClose, onToggleSignUp, o
               return (
                 <tr key={m.id}>
                   {isStrategy && <td style={{ fontFamily: "var(--font-mono)", color: showRank ? "var(--frost)" : "var(--steel-dim)" }}>{showRank ? `#${rankCounter}` : "—"}</td>}
-                  <td>{m.name}{noShow && <span className="wsc-pill" style={{ background: "#E2604F22", color: "var(--danger)", marginLeft: 8 }}>No-show</span>}</td>
-                  <td><button className="wsc-btn wsc-btn-icon" style={{ background: p?.signedUp ? "#6FCBEA22" : "transparent", borderColor: p?.signedUp ? "var(--frost)" : "var(--border)" }}
-                    onClick={() => onToggleSignUp(event.id, m.id, !p?.signedUp)} aria-label="Toggle signed up"><Check size={13} color={p?.signedUp ? "var(--frost)" : "var(--steel-dim)"} /></button></td>
-                  <td><button className="wsc-btn wsc-btn-icon" style={{ background: p?.attended ? "#5FBF8C22" : "transparent", borderColor: p?.attended ? "var(--success)" : "var(--border)" }}
-                    onClick={() => onToggleAttend(event.id, m.id, !p?.attended)} aria-label="Toggle attended"><Check size={13} color={p?.attended ? "var(--success)" : "var(--steel-dim)"} /></button></td>
-                  <td>
-                    {p?.attended ? (
-                      <button className="wsc-btn wsc-btn-sm" style={{ background: p?.partial ? "#E8A33D22" : "#5FBF8C22", borderColor: p?.partial ? "var(--amber)" : "var(--success)", color: p?.partial ? "var(--amber)" : "var(--success)" }}
-                        onClick={() => onTogglePartial(event.id, m.id, !p?.partial)}>{p?.partial ? "Left early" : "Full"}</button>
-                    ) : <span style={{ color: "var(--steel-dim)" }}>—</span>}
-                  </td>
+                  <td>{m.name}{isStrategy && noShow && <span className="wsc-pill" style={{ background: "#E2604F22", color: "var(--danger)", marginLeft: 8 }}>No-show</span>}</td>
                   {isStrategy ? (
-                    <td>
-                      <select className="wsc-select" style={{ width: 150 }} value={p?.strategy || ""} onChange={(e) => onSetStrategy(event.id, m.id, e.target.value)}>
-                        <option value="">Not set</option>
-                        <option value="followed">{STRATEGY_LABELS.followed}</option>
-                        <option value="partial">{STRATEGY_LABELS.partial}</option>
-                        <option value="none">{STRATEGY_LABELS.none}</option>
-                      </select>
-                    </td>
+                    <>
+                      <td><button className="wsc-btn wsc-btn-icon" style={{ background: p?.signedUp ? "#6FCBEA22" : "transparent", borderColor: p?.signedUp ? "var(--frost)" : "var(--border)" }}
+                        onClick={() => onToggleSignUp(event.id, m.id, !p?.signedUp)} aria-label="Toggle signed up"><Check size={13} color={p?.signedUp ? "var(--frost)" : "var(--steel-dim)"} /></button></td>
+                      <td><button className="wsc-btn wsc-btn-icon" style={{ background: p?.attended ? "#5FBF8C22" : "transparent", borderColor: p?.attended ? "var(--success)" : "var(--border)" }}
+                        onClick={() => onToggleAttend(event.id, m.id, !p?.attended)} aria-label="Toggle attended"><Check size={13} color={p?.attended ? "var(--success)" : "var(--steel-dim)"} /></button></td>
+                      <td>
+                        {p?.attended ? (
+                          <button className="wsc-btn wsc-btn-sm" style={{ background: p?.partial ? "#E8A33D22" : "#5FBF8C22", borderColor: p?.partial ? "var(--amber)" : "var(--success)", color: p?.partial ? "var(--amber)" : "var(--success)" }}
+                            onClick={() => onTogglePartial(event.id, m.id, !p?.partial)}>{p?.partial ? "Left early" : "Full"}</button>
+                        ) : <span style={{ color: "var(--steel-dim)" }}>—</span>}
+                      </td>
+                      <td>
+                        <select className="wsc-select" style={{ width: 150 }} value={p?.strategy || ""} onChange={(e) => onSetStrategy(event.id, m.id, e.target.value)}>
+                          <option value="">Not set</option>
+                          <option value="followed">{STRATEGY_LABELS.followed}</option>
+                          <option value="partial">{STRATEGY_LABELS.partial}</option>
+                          <option value="none">{STRATEGY_LABELS.none}</option>
+                        </select>
+                      </td>
+                    </>
                   ) : (
-                    <td><input className="wsc-input" style={{ width: 90 }} type="number" placeholder="—" defaultValue={p?.score ?? ""} onBlur={(e) => onScore(event.id, m.id, e.target.value)} /></td>
+                    <td>
+                      <button className="wsc-btn wsc-btn-icon" style={{ background: p?.attended ? "#6FCBEA22" : "transparent", borderColor: p?.attended ? "var(--frost)" : "var(--border)" }}
+                        onClick={() => onToggleAttend(event.id, m.id, !p?.attended)} aria-label="Toggle participated"><Check size={13} color={p?.attended ? "var(--frost)" : "var(--steel-dim)"} /></button>
+                    </td>
                   )}
+                  {!isStrategy && <td><input className="wsc-input" style={{ width: 90 }} type="number" placeholder="—" defaultValue={p?.score ?? ""} onBlur={(e) => onScore(event.id, m.id, e.target.value)} /></td>}
                   <td><input className="wsc-input" style={{ width: 150 }} placeholder="e.g. left after 20 min" defaultValue={p?.note ?? ""} onBlur={(e) => onNote(event.id, m.id, e.target.value)} /></td>
                 </tr>
               );
@@ -998,7 +1041,7 @@ function EventsTab({ events, members, participation, onOpenEvent }) {
                   return (
                     <tr key={ev.id} style={{ cursor: "pointer" }} onClick={() => onOpenEvent(ev)}>
                       <td style={{ color: "var(--steel)" }}>{fmtDate(ev.date)}</td>
-                      <td style={{ fontWeight: 600 }}>{ev.name}{ev.mode === "strategy" && <span className="wsc-pill" style={{ background: "#B14EFF22", color: "#B14EFF", marginLeft: 6, fontSize: 11 }}>Strategy</span>}</td>
+                      <td style={{ fontWeight: 600 }}>{ev.name}<ModeBadge mode={ev.mode} /></td>
                       <td style={{ color: "var(--steel-dim)" }}>{ev.session || "—"}</td>
                       <td style={{ fontFamily: "var(--font-mono)" }}>{signed}</td>
                       <td style={{ fontFamily: "var(--font-mono)", color: "var(--success)" }}>{attended}</td>
@@ -1106,6 +1149,7 @@ export default function App() {
     const { error } = await supabase.from("settings").update({
       alliance_name: next.allianceName, leader_name: next.leaderName,
       inactivity_days: next.inactivityDays, leaver_retention_days: next.leaverRetentionDays,
+      rank_labels: next.rankLabels || {},
     }).eq("id", 1);
     if (error) {
       console.error("Failed to save settings:", error);
@@ -1154,6 +1198,13 @@ export default function App() {
     const { data, error } = await supabase.from("events").insert(eventToRow(ev)).select().single();
     if (!error && data) setEvents((prev) => [rowToEvent(data), ...prev]);
     setShowAddEvent(false);
+  }, []);
+
+  const deleteEvent = useCallback(async (id) => {
+    await supabase.from("events").delete().eq("id", id); // cascades to participation rows
+    setEvents((prev) => prev.filter((e) => e.id !== id));
+    setParticipation((prev) => prev.filter((p) => p.eventId !== id));
+    setOpenEvent(null);
   }, []);
 
   const upsertParticipation = useCallback(async (eventId, memberId, patch) => {
@@ -1374,8 +1425,8 @@ export default function App() {
         </div>
         <div className="wsc-body wsc-scroll">
           {tab === "dashboard" && <Dashboard members={members} growth={growth} events={events} participation={participation} config={config} />}
-          {tab === "roster" && <RosterTab members={members} growth={growth} lastActivityByMember={lastActivityByMember} onEdit={(m) => setMemberModal(m)} onBulkLeave={bulkMarkLeft} />}
-          {tab === "leavers" && <LeaversTab members={members} retentionDays={config.leaverRetentionDays ?? 90} onReactivate={reactivateMember} onPurgeNow={deleteMember} onEdit={(m) => setMemberModal(m)} />}
+          {tab === "roster" && <RosterTab members={members} growth={growth} lastActivityByMember={lastActivityByMember} rankLabels={config.rankLabels} onEdit={(m) => setMemberModal(m)} onBulkLeave={bulkMarkLeft} />}
+          {tab === "leavers" && <LeaversTab members={members} retentionDays={config.leaverRetentionDays ?? 90} rankLabels={config.rankLabels} onReactivate={reactivateMember} onPurgeNow={deleteMember} onEdit={(m) => setMemberModal(m)} />}
           {tab === "growth" && <GrowthTab members={roster} growth={growth} onEditMember={openGrowthFor} />}
           {tab === "events" && <EventsTab events={events} members={members} participation={participation} onOpenEvent={(ev) => setOpenEvent(ev)} />}
         </div>
@@ -1386,7 +1437,7 @@ export default function App() {
       {(showAddMember || memberModal) && <MemberModal member={memberModal} onClose={() => { setShowAddMember(false); setMemberModal(null); }} onSave={saveMember} onDelete={deleteMember} />}
       {showLogGrowth && <LogGrowthModal members={roster} profiles={growth} initialMemberId={growthPreset} onClose={() => { setShowLogGrowth(false); setGrowthPreset(null); }} onSave={saveGrowth} />}
       {showAddEvent && <EventModal onClose={() => setShowAddEvent(false)} onSave={addEvent} />}
-      {openEvent && <EventDetail event={openEvent} members={members} participation={participation} onClose={() => setOpenEvent(null)} onToggleSignUp={toggleSignUp} onToggleAttend={toggleAttend} onTogglePartial={togglePartial} onScore={setScore} onNote={setNote} onSetStrategy={setStrategy} />}
+      {openEvent && <EventDetail event={openEvent} members={members} participation={participation} onClose={() => setOpenEvent(null)} onDelete={deleteEvent} onToggleSignUp={toggleSignUp} onToggleAttend={toggleAttend} onTogglePartial={togglePartial} onScore={setScore} onNote={setNote} onSetStrategy={setStrategy} />}
     </div>
   );
 }
