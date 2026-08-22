@@ -165,7 +165,7 @@ const STYLE = `
   border-radius:8px; padding:0 10px; }
 .wsc-search input { border:none; background:transparent; padding:8px 0; font-size:14px; color:var(--white); flex:1; }
 .wsc-search input:focus { outline:none; }
-.wsc-pill { font-size:11.5px; padding:2px 8px; border-radius:20px; font-weight:700; letter-spacing:0.02em; }
+.wsc-pill { font-size:11.5px; padding:2px 8px; border-radius:20px; font-weight:700; letter-spacing:0.02em; white-space:nowrap; display:inline-block; }
 .wsc-role-badge { display:inline-flex; align-items:center; padding:3px 9px; border-radius:20px; font-size:11.5px; font-weight:700;
   line-height:1; font-family:var(--font-mono); vertical-align:middle;
   letter-spacing:0.03em; text-transform:uppercase; border:1px solid; background:rgba(255,255,255,0.02); }
