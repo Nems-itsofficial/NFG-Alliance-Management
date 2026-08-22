@@ -94,8 +94,8 @@ const rowToMember = (r) => ({ id: r.id, name: r.name, gameId: r.game_id || "", r
 const memberToRow = (m) => ({ name: m.name, game_id: m.gameId || "", rank: m.rank, status: m.status, custom_role: m.customRole || "", join_date: m.joinDate || null, left_date: m.leftDate || null, notes: m.notes || "" });
 const rowToGrowth = (r) => ({ memberId: r.member_id, power: r.power ?? "", previousPower: r.previous_power ?? "", furnaceLevel: r.furnace_level || "", classes: r.classes || {}, updatedDate: r.updated_date || "" });
 const growthToRow = (g) => ({ member_id: g.memberId, power: g.power === "" ? null : g.power, previous_power: g.previousPower === "" ? null : g.previousPower, furnace_level: g.furnaceLevel || "", classes: g.classes || {}, updated_date: g.updatedDate || null });
-const rowToEvent = (r) => ({ id: r.id, date: r.date, type: r.type, name: r.name, session: r.session || "", mode: r.mode || "score" });
-const eventToRow = (e) => ({ date: e.date, type: e.type, name: e.name, session: e.session || "", mode: e.mode || "score" });
+const rowToEvent = (r) => ({ id: r.id, date: r.date, type: r.type, name: r.name, session: r.session || "", mode: r.mode || "score", linkedType: r.linked_type || "", linkedId: r.linked_id || "" });
+const eventToRow = (e) => ({ date: e.date, type: e.type, name: e.name, session: e.session || "", mode: e.mode || "score", linked_type: e.linkedType || null, linked_id: e.linkedId || null });
 const rowToPart = (r) => ({ id: r.id, eventId: r.event_id, memberId: r.member_id, signedUp: !!r.signed_up, attended: !!r.attended, partial: !!r.partial, score: r.score ?? "", note: r.note || "", strategy: r.strategy || "" });
 const partToRow = (p) => ({ event_id: p.eventId, member_id: p.memberId, signed_up: !!p.signedUp, attended: !!p.attended, partial: !!p.partial, score: p.score === "" || p.score === undefined ? null : p.score, note: p.note || "", strategy: p.strategy || "" });
 const rowToCanyon = (r) => ({ id: r.id, name: r.name, date: r.date || "", seats: r.seats || {} });
@@ -930,22 +930,34 @@ function GrowthTab({ members, growth, onEditMember }) {
     </div>
   );
 }
-function EventModal({ onClose, onSave }) {
+function EventModal({ onClose, onSave, canyonAssignments, foundryAssignments }) {
   const [type, setType] = useState(EVENT_TYPES[0]);
   const [name, setName] = useState("");
   const [session, setSession] = useState("");
   const [date, setDate] = useState(todayStr());
   const [mode, setMode] = useState("score");
+  const [linkedId, setLinkedId] = useState("");
   const canSave = type !== "Custom" || name.trim().length > 0;
+  const linkOptions = type === "Canyon Clash" ? canyonAssignments : type === "Foundry Battle" ? foundryAssignments : [];
+  const linkedType = type === "Canyon Clash" ? "canyon" : type === "Foundry Battle" ? "foundry" : "";
   return (
     <Modal title="Add event" onClose={onClose}>
       <div className="wsc-field"><label className="wsc-label">Event type</label>
-        <select className="wsc-select" value={type} onChange={(e) => setType(e.target.value)}>{EVENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select></div>
+        <select className="wsc-select" value={type} onChange={(e) => { setType(e.target.value); setLinkedId(""); }}>{EVENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select></div>
       {type === "Custom" && <div className="wsc-field"><label className="wsc-label">Event name</label>
         <input className="wsc-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Fishing tournament" /></div>}
       <div className="wsc-field"><label className="wsc-label">Session label (optional)</label>
         <input className="wsc-input" value={session} onChange={(e) => setSession(e.target.value)} placeholder={sessionPlaceholder(type)} /></div>
       <div className="wsc-field"><label className="wsc-label">Date</label><input className="wsc-input" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
+      {linkOptions.length > 0 && (
+        <div className="wsc-field"><label className="wsc-label">Link to a plan (optional)</label>
+          <select className="wsc-select" value={linkedId} onChange={(e) => setLinkedId(e.target.value)}>
+            <option value="">None</option>
+            {linkOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+          <div style={{ fontSize: 11.5, color: "var(--steel-dim)", marginTop: 5 }}>Lets you one-click import everyone with a seat in that plan as participants once the event is created.</div>
+        </div>
+      )}
       <div className="wsc-field">
         <label className="wsc-label">Track by</label>
         <div style={{ display: "flex", gap: 8 }}>
@@ -959,7 +971,7 @@ function EventModal({ onClose, onSave }) {
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
         <button className="wsc-btn" onClick={onClose}>Cancel</button>
         <button className="wsc-btn wsc-btn-primary" disabled={!canSave} style={{ opacity: canSave ? 1 : 0.5 }}
-          onClick={() => canSave && onSave({ id: uid(), name: type === "Custom" ? name : type, type, session, date, mode })}><Save size={13} /> Create event</button>
+          onClick={() => canSave && onSave({ id: uid(), name: type === "Custom" ? name : type, type, session, date, mode, linkedType: linkedId ? linkedType : "", linkedId })}><Save size={13} /> Create event</button>
       </div>
     </Modal>
   );
@@ -1008,7 +1020,7 @@ function AddParticipantPicker({ members, excludeIds, onAdd }) {
     </div>
   );
 }
-function EventDetail({ event, members, participation, onClose, onDelete, onToggleSignUp, onToggleAttend, onTogglePartial, onScore, onNote, onSetStrategy }) {
+function EventDetail({ event, members, participation, canyonAssignments, foundryAssignments, onClose, onDelete, onToggleSignUp, onToggleAttend, onTogglePartial, onScore, onNote, onSetStrategy, onImportFromPlan }) {
   const isStrategy = event.mode === "strategy";
   const partMap = {};
   participation.filter((p) => p.eventId === event.id).forEach((p) => { partMap[p.memberId] = p; });
@@ -1022,14 +1034,19 @@ function EventDetail({ event, members, participation, onClose, onDelete, onToggl
   const handleDelete = () => {
     if (window.confirm(`Delete "${event.name}${event.session ? ` · ${event.session}` : ""}" and all its participation data? This can't be undone.`)) onDelete(event.id);
   };
+  const linkedPlan = event.linkedType === "canyon" ? canyonAssignments.find((a) => a.id === event.linkedId)
+    : event.linkedType === "foundry" ? foundryAssignments.find((a) => a.id === event.linkedId) : null;
   return (
     <Modal title={`${event.name}${event.session ? ` · ${event.session}` : ""} — ${fmtDate(event.date)}`} onClose={onClose} wide>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 13, color: "var(--steel-dim)" }}>
           {addedMembers.length} added · {attendedCount} attended
           <ModeBadge mode={event.mode} />
         </div>
-        <button className="wsc-btn wsc-btn-sm wsc-btn-danger" onClick={handleDelete}><Trash2 size={12} /> Delete event</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          {linkedPlan && <button className="wsc-btn wsc-btn-sm" onClick={() => onImportFromPlan(event, linkedPlan)}><Users size={12} /> Import from "{linkedPlan.name}"</button>}
+          <button className="wsc-btn wsc-btn-sm wsc-btn-danger" onClick={handleDelete}><Trash2 size={12} /> Delete event</button>
+        </div>
       </div>
       <AddParticipantPicker members={members} excludeIds={participantIds} onAdd={(id) => onToggleSignUp(event.id, id, true)} />
       <div className="wsc-scroll" style={{ maxHeight: 380, overflowY: "auto", overflowX: "auto" }}>
@@ -1798,6 +1815,10 @@ export default function App() {
   const setScore = useCallback((eventId, memberId, score) => upsertParticipation(eventId, memberId, { score }), [upsertParticipation]);
   const setNote = useCallback((eventId, memberId, note) => upsertParticipation(eventId, memberId, { note }), [upsertParticipation]);
   const setStrategy = useCallback((eventId, memberId, strategy) => upsertParticipation(eventId, memberId, { strategy }), [upsertParticipation]);
+  const importFromPlan = useCallback(async (event, plan) => {
+    const memberIds = [...new Set(Object.values(plan.seats || {}).flat().filter(Boolean))];
+    for (const memberId of memberIds) await toggleSignUp(event.id, memberId, true);
+  }, [toggleSignUp]);
 
   const roster = members.filter((m) => m.status !== "left");
   const leaverCount = members.filter((m) => m.status === "left").length;
@@ -2025,8 +2046,8 @@ export default function App() {
         onExportExcel={exportExcel} onExportSummary={exportSummary} onExportBackup={exportBackup} onImportBackup={importBackup} />}
       {(showAddMember || memberModal) && <MemberModal member={memberModal} onClose={() => { setShowAddMember(false); setMemberModal(null); }} onSave={saveMember} onDelete={deleteMember} />}
       {showLogGrowth && <LogGrowthModal members={roster} profiles={growth} initialMemberId={growthPreset} onClose={() => { setShowLogGrowth(false); setGrowthPreset(null); }} onSave={saveGrowth} />}
-      {showAddEvent && <EventModal onClose={() => setShowAddEvent(false)} onSave={addEvent} />}
-      {openEvent && <EventDetail event={openEvent} members={members} participation={participation} onClose={() => setOpenEvent(null)} onDelete={deleteEvent} onToggleSignUp={toggleSignUp} onToggleAttend={toggleAttend} onTogglePartial={togglePartial} onScore={setScore} onNote={setNote} onSetStrategy={setStrategy} />}
+      {showAddEvent && <EventModal onClose={() => setShowAddEvent(false)} onSave={addEvent} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} />}
+      {openEvent && <EventDetail event={openEvent} members={members} participation={participation} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} onClose={() => setOpenEvent(null)} onDelete={deleteEvent} onToggleSignUp={toggleSignUp} onToggleAttend={toggleAttend} onTogglePartial={togglePartial} onScore={setScore} onNote={setNote} onSetStrategy={setStrategy} onImportFromPlan={importFromPlan} />}
     </div>
   );
 }
