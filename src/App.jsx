@@ -27,6 +27,25 @@ const CANYON_TEAMS = [
   { key: "harass3", label: "Harassment 3 (Middle / Support)", seats: 5, startRow: 20 },
   { key: "wall", label: "Wall Team", seats: 14, startRow: 25 },
 ];
+// Matches public/templates/Foundry_Template.xlsx exactly — identical layout on both the
+// LG1 and LG2 sheets. Column B buildings use the Player-name column B; column F buildings
+// use column F. Members can occupy more than one building (roles change across phases),
+// so unlike Canyon there is no "already used elsewhere" exclusion here.
+const FOUNDRY_BUILDINGS = [
+  { key: "proto1", label: "Prototype 1", col: "B", startRow: 2, seats: 7 },
+  { key: "proto2", label: "Prototype 2", col: "F", startRow: 2, seats: 7 },
+  { key: "boiler", label: "Boiler", col: "B", startRow: 10, seats: 5 },
+  { key: "transit", label: "Transit Station", col: "F", startRow: 10, seats: 5 },
+  { key: "repair1", label: "Repair 1", col: "B", startRow: 16, seats: 3 },
+  { key: "repair2", label: "Repair 2", col: "F", startRow: 16, seats: 3 },
+  { key: "repair3", label: "Repair 3", col: "B", startRow: 20, seats: 3 },
+  { key: "repair4", label: "Repair 4", col: "F", startRow: 20, seats: 3 },
+  { key: "castle", label: "Center / Castle", col: "B", startRow: 25, seats: 5 },
+  { key: "munition", label: "Munition", col: "F", startRow: 25, seats: 5 },
+  { key: "mercenary", label: "Mercenary", col: "B", startRow: 31, seats: 5 },
+  { key: "arsenal", label: "Gathering Team (Arsenal Supplies)", col: "F", startRow: 31, seats: 4 },
+  { key: "offensive", label: "Offensive Group / Gathering Team", col: "B", startRow: 40, seats: 2 },
+];
 const sessionPlaceholder = (type) => (type === "Foundry Battle" || type === "Canyon Clash") ? 'e.g. "Legion 1" or "Legion 2"' : 'e.g. "Team 1" or "Team 2"';
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -81,15 +100,21 @@ const rowToPart = (r) => ({ id: r.id, eventId: r.event_id, memberId: r.member_id
 const partToRow = (p) => ({ event_id: p.eventId, member_id: p.memberId, signed_up: !!p.signedUp, attended: !!p.attended, partial: !!p.partial, score: p.score === "" || p.score === undefined ? null : p.score, note: p.note || "", strategy: p.strategy || "" });
 const rowToCanyon = (r) => ({ id: r.id, name: r.name, date: r.date || "", seats: r.seats || {} });
 const canyonToRow = (c) => ({ name: c.name, date: c.date || null, seats: c.seats || {} });
+const rowToFoundry = (r) => ({ id: r.id, name: r.name, date: r.date || "", lg1Active: r.lg1_active ?? true, lg2Active: r.lg2_active ?? false, lg1Seats: r.lg1_seats || {}, lg2Seats: r.lg2_seats || {} });
+const foundryToRow = (f) => ({ name: f.name, date: f.date || null, lg1_active: !!f.lg1Active, lg2_active: !!f.lg2Active, lg1_seats: f.lg1Seats || {}, lg2_seats: f.lg2Seats || {} });
+const rowToCustom = (r) => ({ id: r.id, name: r.name, date: r.date || "", teams: r.teams || [] });
+const customToRow = (c) => ({ name: c.name, date: c.date || null, teams: c.teams || [] });
 
 async function fetchAllData() {
-  const [settingsRes, membersRes, growthRes, eventsRes, partRes, canyonRes] = await Promise.all([
+  const [settingsRes, membersRes, growthRes, eventsRes, partRes, canyonRes, foundryRes, customRes] = await Promise.all([
     supabase.from("settings").select("*").eq("id", 1).single(),
     supabase.from("members").select("*").order("created_at", { ascending: true }),
     supabase.from("growth").select("*"),
     supabase.from("events").select("*").order("date", { ascending: false }),
     supabase.from("participation").select("*"),
     supabase.from("canyon_assignments").select("*").order("created_at", { ascending: false }),
+    supabase.from("foundry_assignments").select("*").order("created_at", { ascending: false }),
+    supabase.from("custom_assignments").select("*").order("created_at", { ascending: false }),
   ]);
   const config = settingsRes.data
     ? { allianceName: settingsRes.data.alliance_name || "", leaderName: settingsRes.data.leader_name || "", inactivityDays: settingsRes.data.inactivity_days ?? 10, leaverRetentionDays: settingsRes.data.leaver_retention_days ?? 90, rankLabels: settingsRes.data.rank_labels || {} }
@@ -101,6 +126,8 @@ async function fetchAllData() {
     events: (eventsRes.data || []).map(rowToEvent),
     participation: (partRes.data || []).map(rowToPart),
     canyonAssignments: (canyonRes.data || []).map(rowToCanyon),
+    foundryAssignments: (foundryRes.data || []).map(rowToFoundry),
+    customAssignments: (customRes.data || []).map(rowToCustom),
   };
 }
 
@@ -1109,20 +1136,28 @@ function EventsTab({ events, members, participation, onOpenEvent }) {
     </div>
   );
 }
-function AssignmentModal({ onClose, onSave }) {
+function AssignmentModal({ type, onClose, onSave }) {
   const [name, setName] = useState("");
   const [date, setDate] = useState(todayStr());
   const canSave = name.trim().length > 0;
+  const titles = { canyon: "New Canyon Clash plan", foundry: "New Foundry Battle plan", custom: "New custom event plan" };
+  const placeholders = { canyon: 'e.g. "Canyon Clash — Aug 28"', foundry: 'e.g. "Foundry Battle — Aug 30"', custom: 'e.g. "Alliance Championship — Sep 2"' };
+  const build = () => {
+    const base = { id: uid(), name, date };
+    if (type === "foundry") return { ...base, lg1Active: true, lg2Active: false, lg1Seats: {}, lg2Seats: {} };
+    if (type === "custom") return { ...base, teams: [] };
+    return { ...base, seats: {} };
+  };
   return (
-    <Modal title="New Canyon Clash plan" onClose={onClose}>
+    <Modal title={titles[type]} onClose={onClose}>
       <div className="wsc-field"><label className="wsc-label">Name</label>
-        <input className="wsc-input" value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "Canyon Clash — Aug 28"' /></div>
+        <input className="wsc-input" value={name} onChange={(e) => setName(e.target.value)} placeholder={placeholders[type]} /></div>
       <div className="wsc-field"><label className="wsc-label">Date</label>
         <input className="wsc-input" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
         <button className="wsc-btn" onClick={onClose}>Cancel</button>
         <button className="wsc-btn wsc-btn-primary" disabled={!canSave} style={{ opacity: canSave ? 1 : 0.5 }}
-          onClick={() => canSave && onSave({ id: uid(), name, date, seats: {} })}><Save size={13} /> Create</button>
+          onClick={() => canSave && onSave(build())}><Save size={13} /> Create</button>
       </div>
     </Modal>
   );
@@ -1209,43 +1244,227 @@ function CanyonEditor({ assignment, members, growth, onChangeSeats, onExport, on
     </div>
   );
 }
-function AssignmentsTab({ canyonAssignments, members, growth, onCreate, onChangeSeats, onExport, onDelete }) {
-  const [showNew, setShowNew] = useState(false);
-  const [openId, setOpenId] = useState(null);
-  const open = canyonAssignments.find((a) => a.id === openId);
-  if (open) {
+function FoundryEditor({ assignment, members, growth, onChangeSeats, onToggleLegion, onExport, onDelete, onBack }) {
+  const roster = members.filter((m) => m.status !== "left");
+  const powerByMember = useMemo(() => { const map = {}; growth.forEach((g) => { map[g.memberId] = g.power; }); return map; }, [growth]);
+  const totalPerLegion = FOUNDRY_BUILDINGS.reduce((s, b) => s + b.seats, 0);
+
+  const renderLegion = (legionLabel, field, seats) => {
+    const setSeat = (buildingKey, idx, memberId) => {
+      const arr = [...(seats[buildingKey] || [])];
+      arr[idx] = memberId || null;
+      onChangeSeats(field, { ...seats, [buildingKey]: arr });
+    };
+    const filled = Object.values(seats).flat().filter(Boolean).length;
     return (
-      <CanyonEditor assignment={open} members={members} growth={growth}
-        onChangeSeats={(seats) => onChangeSeats(open.id, seats)}
-        onExport={() => onExport(open)}
-        onDelete={() => { onDelete(open.id); setOpenId(null); }}
-        onBack={() => setOpenId(null)} />
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div className="wsc-stat-label" style={{ margin: 0 }}>{legionLabel}</div>
+          <span style={{ fontSize: 12, color: "var(--steel-dim)", fontFamily: "var(--font-mono)" }}>{filled} / {totalPerLegion} filled</span>
+        </div>
+        {FOUNDRY_BUILDINGS.map((b) => (
+          <div key={b.key} className="wsc-card" style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8, color: "var(--steel)" }}>{b.label} <span style={{ color: "var(--steel-dim)", fontWeight: 400 }}>({b.seats} seats)</span></div>
+            {Array.from({ length: b.seats }).map((_, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+                <span style={{ width: 22, textAlign: "right", color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{i + 1}</span>
+                <SeatPicker value={seats[b.key]?.[i] || ""} roster={roster} usedIds={new Set()} powerByMember={powerByMember}
+                  onSelect={(id) => setSeat(b.key, i, id)} />
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
     );
-  }
+  };
+
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
-        <button className="wsc-btn wsc-btn-primary" onClick={() => setShowNew(true)}><Plus size={13} /> New Canyon Clash plan</button>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+        <button className="wsc-btn wsc-btn-sm" onClick={onBack}>&larr; Back to plans</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="wsc-btn wsc-btn-sm wsc-btn-danger" onClick={onDelete}><Trash2 size={12} /> Delete</button>
+          <button className="wsc-btn wsc-btn-primary" onClick={onExport}><Download size={13} /> Export to Excel</button>
+        </div>
       </div>
-      <div style={{ fontSize: 12.5, color: "var(--steel-dim)", marginBottom: 14 }}>Foundry Battle and Custom event planning are coming soon — Canyon Clash is ready now.</div>
-      {canyonAssignments.length === 0 ? (
-        <div className="wsc-card"><EmptyState title="No Canyon Clash plans yet" body='Click "New Canyon Clash plan" to start assigning members to teams.' /></div>
+      <div className="wsc-card" style={{ marginBottom: 14, display: "flex", gap: 20 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+          <input type="checkbox" className="wsc-checkbox" checked={assignment.lg1Active} onChange={(e) => onToggleLegion("lg1Active", e.target.checked)} /> Use Legion 1
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+          <input type="checkbox" className="wsc-checkbox" checked={assignment.lg2Active} onChange={(e) => onToggleLegion("lg2Active", e.target.checked)} /> Use Legion 2
+        </label>
+      </div>
+      {assignment.lg1Active && renderLegion("Legion 1", "lg1Seats", assignment.lg1Seats || {})}
+      {assignment.lg2Active && renderLegion("Legion 2", "lg2Seats", assignment.lg2Seats || {})}
+      {!assignment.lg1Active && !assignment.lg2Active && (
+        <div className="wsc-card"><EmptyState title="No legion selected" body="Check at least one legion above to start assigning members." /></div>
+      )}
+    </div>
+  );
+}
+function CustomTeamCard({ team, roster, powerByMember, onChange, onRemove }) {
+  const [query, setQuery] = useState("");
+  const memberIds = team.memberIds || [];
+  const addMember = (id) => { if (!memberIds.includes(id)) onChange({ ...team, memberIds: [...memberIds, id] }); setQuery(""); };
+  const removeMember = (id) => onChange({ ...team, memberIds: memberIds.filter((m) => m !== id) });
+  const candidates = query ? roster.filter((m) => !memberIds.includes(m.id) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 15) : [];
+  return (
+    <div className="wsc-card" style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <input className="wsc-input" style={{ maxWidth: 260, fontWeight: 600 }} value={team.name} onChange={(e) => onChange({ ...team, name: e.target.value })} placeholder="Team name" />
+        <button className="wsc-btn wsc-btn-icon" onClick={onRemove} aria-label="Remove team"><Trash2 size={13} color="var(--danger)" /></button>
+      </div>
+      <div className="wsc-field">
+        <label className="wsc-label">Members</label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+          {memberIds.map((id) => {
+            const m = roster.find((r) => r.id === id);
+            return m ? (
+              <span key={id} className="wsc-pill" style={{ background: "var(--panel-2)", color: "var(--white)", display: "flex", alignItems: "center", gap: 6 }}>
+                {m.name}<X size={11} style={{ cursor: "pointer" }} onClick={() => removeMember(id)} />
+              </span>
+            ) : null;
+          })}
+        </div>
+        <div style={{ position: "relative" }}>
+          <input className="wsc-input" placeholder="Search a member to add…" value={query} onChange={(e) => setQuery(e.target.value)} />
+          {query && (
+            <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 8, marginTop: 4, maxHeight: 180, overflowY: "auto", zIndex: 20 }}>
+              {candidates.length === 0 ? <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>No matches</div> :
+                candidates.map((m) => <div key={m.id} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13 }} onMouseDown={() => addMember(m.id)}>{m.name}</div>)}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="wsc-field">
+        <label className="wsc-label">Rally lead</label>
+        <SeatPicker value={team.rallyLeadId || ""} roster={roster} usedIds={new Set()} powerByMember={powerByMember}
+          onSelect={(id) => onChange({ ...team, rallyLeadId: id })} />
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <div className="wsc-field" style={{ flex: 1 }}>
+          <label className="wsc-label">Rally heroes / ratio</label>
+          <textarea className="wsc-textarea" rows={2} value={team.rallyNotes || ""} onChange={(e) => onChange({ ...team, rallyNotes: e.target.value })} placeholder="e.g. 50/10/40 — Hervor/Karol/Rufus" />
+        </div>
+        <div className="wsc-field" style={{ flex: 1 }}>
+          <label className="wsc-label">Joiner heroes / ratio</label>
+          <textarea className="wsc-textarea" rows={2} value={team.joinerNotes || ""} onChange={(e) => onChange({ ...team, joinerNotes: e.target.value })} placeholder="e.g. 50/15/35 — Karol/Lloyd/Ligeia" />
+        </div>
+      </div>
+    </div>
+  );
+}
+function CustomEditor({ assignment, members, growth, onChangeTeams, onExport, onDelete, onBack }) {
+  const roster = members.filter((m) => m.status !== "left");
+  const powerByMember = useMemo(() => { const map = {}; growth.forEach((g) => { map[g.memberId] = g.power; }); return map; }, [growth]);
+  const teams = assignment.teams || [];
+  const updateTeam = (idx, next) => { const arr = [...teams]; arr[idx] = next; onChangeTeams(arr); };
+  const removeTeam = (idx) => onChangeTeams(teams.filter((_, i) => i !== idx));
+  const addTeam = () => onChangeTeams([...teams, { id: uid(), name: `Team ${teams.length + 1}`, memberIds: [], rallyLeadId: "", rallyNotes: "", joinerNotes: "" }]);
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+        <button className="wsc-btn wsc-btn-sm" onClick={onBack}>&larr; Back to plans</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="wsc-btn wsc-btn-sm wsc-btn-danger" onClick={onDelete}><Trash2 size={12} /> Delete</button>
+          <button className="wsc-btn wsc-btn-primary" onClick={onExport}><Download size={13} /> Export to Excel</button>
+        </div>
+      </div>
+      {teams.length === 0 ? (
+        <div className="wsc-card"><EmptyState title="No teams yet" body='Click "Add team" below to start building this plan.' /></div>
+      ) : teams.map((team, idx) => (
+        <CustomTeamCard key={team.id} team={team} roster={roster} powerByMember={powerByMember}
+          onChange={(next) => updateTeam(idx, next)} onRemove={() => removeTeam(idx)} />
+      ))}
+      <button className="wsc-btn" onClick={addTeam}><Plus size={13} /> Add team</button>
+    </div>
+  );
+}
+function AssignmentsTab({ canyonAssignments, foundryAssignments, customAssignments, members, growth,
+  onCreateCanyon, onChangeCanyonSeats, onExportCanyon, onDeleteCanyon,
+  onCreateFoundry, onChangeFoundrySeats, onToggleFoundryLegion, onExportFoundry, onDeleteFoundry,
+  onCreateCustom, onChangeCustomTeams, onExportCustom, onDeleteCustom }) {
+  const [type, setType] = useState("canyon");
+  const [showNew, setShowNew] = useState(false);
+  const [openCanyonId, setOpenCanyonId] = useState(null);
+  const [openFoundryId, setOpenFoundryId] = useState(null);
+  const [openCustomId, setOpenCustomId] = useState(null);
+
+  const openCanyon = canyonAssignments.find((a) => a.id === openCanyonId);
+  const openFoundry = foundryAssignments.find((a) => a.id === openFoundryId);
+  const openCustom = customAssignments.find((a) => a.id === openCustomId);
+
+  if (openCanyon) {
+    return <CanyonEditor assignment={openCanyon} members={members} growth={growth}
+      onChangeSeats={(seats) => onChangeCanyonSeats(openCanyon.id, seats)}
+      onExport={() => onExportCanyon(openCanyon)}
+      onDelete={() => { onDeleteCanyon(openCanyon.id); setOpenCanyonId(null); }}
+      onBack={() => setOpenCanyonId(null)} />;
+  }
+  if (openFoundry) {
+    return <FoundryEditor assignment={openFoundry} members={members} growth={growth}
+      onChangeSeats={(field, seats) => onChangeFoundrySeats(openFoundry.id, field, seats)}
+      onToggleLegion={(field, active) => onToggleFoundryLegion(openFoundry.id, field, active)}
+      onExport={() => onExportFoundry(openFoundry)}
+      onDelete={() => { onDeleteFoundry(openFoundry.id); setOpenFoundryId(null); }}
+      onBack={() => setOpenFoundryId(null)} />;
+  }
+  if (openCustom) {
+    return <CustomEditor assignment={openCustom} members={members} growth={growth}
+      onChangeTeams={(teams) => onChangeCustomTeams(openCustom.id, teams)}
+      onExport={() => onExportCustom(openCustom)}
+      onDelete={() => { onDeleteCustom(openCustom.id); setOpenCustomId(null); }}
+      onBack={() => setOpenCustomId(null)} />;
+  }
+
+  const listFor = { canyon: canyonAssignments, foundry: foundryAssignments, custom: customAssignments }[type];
+  const labelFor = { canyon: "Canyon Clash", foundry: "Foundry Battle", custom: "Custom event" };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8 }}>
+          {["canyon", "foundry", "custom"].map((t) => (
+            <button key={t} className={`wsc-chip ${type === t ? "active" : ""}`} onClick={() => setType(t)}>{labelFor[t]}</button>
+          ))}
+        </div>
+        <button className="wsc-btn wsc-btn-primary" onClick={() => setShowNew(true)}><Plus size={13} /> New {labelFor[type]} plan</button>
+      </div>
+      {listFor.length === 0 ? (
+        <div className="wsc-card"><EmptyState title={`No ${labelFor[type]} plans yet`} body={`Click "New ${labelFor[type]} plan" to get started.`} /></div>
       ) : (
         <div className="wsc-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))" }}>
-          {canyonAssignments.map((a) => {
-            const filled = Object.values(a.seats || {}).flat().filter(Boolean).length;
-            const total = CANYON_TEAMS.reduce((s, t) => s + t.seats, 0);
+          {listFor.map((a) => {
+            let summary;
+            if (type === "canyon") {
+              const filled = Object.values(a.seats || {}).flat().filter(Boolean).length;
+              const total = CANYON_TEAMS.reduce((s, t) => s + t.seats, 0);
+              summary = `${filled} / ${total} seats filled`;
+            } else if (type === "foundry") {
+              const l1 = Object.values(a.lg1Seats || {}).flat().filter(Boolean).length;
+              const l2 = Object.values(a.lg2Seats || {}).flat().filter(Boolean).length;
+              const legions = (a.lg1Active ? 1 : 0) + (a.lg2Active ? 1 : 0) || 1;
+              summary = `${l1 + l2} / ${FOUNDRY_BUILDINGS.reduce((s, b) => s + b.seats, 0) * legions} seats filled`;
+            } else {
+              const teamCount = (a.teams || []).length;
+              summary = `${teamCount} team${teamCount !== 1 ? "s" : ""}`;
+            }
+            const onClick = () => { if (type === "canyon") setOpenCanyonId(a.id); else if (type === "foundry") setOpenFoundryId(a.id); else setOpenCustomId(a.id); };
             return (
-              <div key={a.id} className="wsc-card" style={{ cursor: "pointer" }} onClick={() => setOpenId(a.id)}>
+              <div key={a.id} className="wsc-card" style={{ cursor: "pointer" }} onClick={onClick}>
                 <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 3 }}>{a.name}</div>
                 <div style={{ fontSize: 12, color: "var(--steel-dim)", marginBottom: 10 }}>{a.date ? fmtDate(a.date) : "No date set"}</div>
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--frost)" }}>{filled} / {total} seats filled</div>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--frost)" }}>{summary}</div>
               </div>
             );
           })}
         </div>
       )}
-      {showNew && <AssignmentModal onClose={() => setShowNew(false)} onSave={(a) => { onCreate(a); setShowNew(false); }} />}
+      {showNew && <AssignmentModal type={type} onClose={() => setShowNew(false)} onSave={(a) => {
+        if (type === "canyon") onCreateCanyon(a); else if (type === "foundry") onCreateFoundry(a); else onCreateCustom(a);
+        setShowNew(false);
+      }} />}
     </div>
   );
 }
@@ -1261,6 +1480,8 @@ export default function App() {
   const [events, setEvents] = useState([]);
   const [participation, setParticipation] = useState([]);
   const [canyonAssignments, setCanyonAssignments] = useState([]);
+  const [foundryAssignments, setFoundryAssignments] = useState([]);
+  const [customAssignments, setCustomAssignments] = useState([]);
 
   const [showConfig, setShowConfig] = useState(false);
   const [memberModal, setMemberModal] = useState(null);
@@ -1300,7 +1521,7 @@ export default function App() {
       setLoading(true);
       setLoadError("");
       try {
-        const { config: cfg, members: mem, growth: gr, events: ev, participation: part, canyonAssignments: canyon } = await fetchAllData();
+        const { config: cfg, members: mem, growth: gr, events: ev, participation: part, canyonAssignments: canyon, foundryAssignments: foundry, customAssignments: custom } = await fetchAllData();
 
         const retention = cfg.leaverRetentionDays ?? 90;
         const purgedIds = mem.filter((m) => m.status === "left" && daysAgo(m.leftDate) > retention).map((m) => m.id);
@@ -1313,7 +1534,7 @@ export default function App() {
           finalPart = part.filter((p) => !purgedIds.includes(p.memberId));
         }
         if (cancelled) return;
-        setConfig(cfg); setMembers(finalMembers); setGrowth(finalGrowth); setEvents(ev); setParticipation(finalPart); setCanyonAssignments(canyon);
+        setConfig(cfg); setMembers(finalMembers); setGrowth(finalGrowth); setEvents(ev); setParticipation(finalPart); setCanyonAssignments(canyon); setFoundryAssignments(foundry); setCustomAssignments(custom);
       } catch (err) {
         console.error("Failed to load alliance data:", err);
         if (!cancelled) setLoadError(err?.message || "Failed to load data. Check your connection and try refreshing.");
@@ -1465,6 +1686,119 @@ export default function App() {
       console.error("Canyon export failed:", err);
       window.alert(`Couldn't export: ${err.message}`);
     }
+  }, [members]);
+
+  const createFoundryAssignment = useCallback(async (a) => {
+    const { data, error } = await supabase.from("foundry_assignments").insert(foundryToRow(a)).select().single();
+    if (!error && data) setFoundryAssignments((prev) => [rowToFoundry(data), ...prev]);
+    else if (error) window.alert(`Couldn't create plan: ${error.message}`);
+  }, []);
+
+  const changeFoundrySeats = useCallback(async (id, field, seats) => {
+    setFoundryAssignments((prev) => prev.map((a) => a.id === id ? { ...a, [field]: seats } : a));
+    const column = field === "lg1Seats" ? "lg1_seats" : "lg2_seats";
+    const { error } = await supabase.from("foundry_assignments").update({ [column]: seats }).eq("id", id);
+    if (error) window.alert(`Couldn't save seat change: ${error.message}`);
+  }, []);
+
+  const toggleFoundryLegion = useCallback(async (id, field, active) => {
+    setFoundryAssignments((prev) => prev.map((a) => a.id === id ? { ...a, [field]: active } : a));
+    const column = field === "lg1Active" ? "lg1_active" : "lg2_active";
+    const { error } = await supabase.from("foundry_assignments").update({ [column]: active }).eq("id", id);
+    if (error) window.alert(`Couldn't save: ${error.message}`);
+  }, []);
+
+  const deleteFoundryAssignment = useCallback(async (id) => {
+    await supabase.from("foundry_assignments").delete().eq("id", id);
+    setFoundryAssignments((prev) => prev.filter((a) => a.id !== id));
+  }, []);
+
+  const exportFoundryAssignment = useCallback(async (assignment) => {
+    try {
+      const res = await fetch("templates/Foundry_Template.xlsx");
+      if (!res.ok) throw new Error("Template not found at public/templates/Foundry_Template.xlsx");
+      const buf = await res.arrayBuffer();
+      const zip = await JSZip.loadAsync(buf);
+      const escapeXml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+      const injectLegion = async (sheetPath, seats) => {
+        const file = zip.file(sheetPath);
+        if (!file) return;
+        let xml = await file.async("string");
+        for (const b of FOUNDRY_BUILDINGS) {
+          const arr = seats[b.key] || [];
+          for (let i = 0; i < b.seats; i++) {
+            const memberId = arr[i];
+            if (!memberId) continue;
+            const member = members.find((m) => m.id === memberId);
+            if (!member) continue;
+            const row = b.startRow + i;
+            const cellRef = `${b.col}${row}`;
+            const nameXml = `<is><t xml:space="preserve">${escapeXml(member.name)}</t></is>`;
+            const replaceWith = (attrs) => {
+              const sm = attrs.match(/s="(\d+)"/);
+              const s = sm ? ` s="${sm[1]}"` : "";
+              return `<c r="${cellRef}"${s} t="inlineStr">${nameXml}</c>`;
+            };
+            const selfClose = new RegExp(`<c r="${cellRef}"([^>]*)/>`);
+            const withBody = new RegExp(`<c r="${cellRef}"([^>]*)>.*?</c>`);
+            if (selfClose.test(xml)) xml = xml.replace(selfClose, (_, attrs) => replaceWith(attrs));
+            else if (withBody.test(xml)) xml = xml.replace(withBody, (_, attrs) => replaceWith(attrs));
+          }
+        }
+        zip.file(sheetPath, xml);
+      };
+
+      if (assignment.lg1Active) await injectLegion("xl/worksheets/sheet1.xml", assignment.lg1Seats || {});
+      if (assignment.lg2Active) await injectLegion("xl/worksheets/sheet2.xml", assignment.lg2Seats || {});
+
+      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(assignment.name || "foundry-battle").replace(/[^a-z0-9]+/gi, "-")}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Foundry export failed:", err);
+      window.alert(`Couldn't export: ${err.message}`);
+    }
+  }, [members]);
+
+  const createCustomAssignment = useCallback(async (a) => {
+    const { data, error } = await supabase.from("custom_assignments").insert(customToRow(a)).select().single();
+    if (!error && data) setCustomAssignments((prev) => [rowToCustom(data), ...prev]);
+    else if (error) window.alert(`Couldn't create plan: ${error.message}`);
+  }, []);
+
+  const changeCustomTeams = useCallback(async (id, teams) => {
+    setCustomAssignments((prev) => prev.map((a) => a.id === id ? { ...a, teams } : a));
+    const { error } = await supabase.from("custom_assignments").update({ teams }).eq("id", id);
+    if (error) window.alert(`Couldn't save: ${error.message}`);
+  }, []);
+
+  const deleteCustomAssignment = useCallback(async (id) => {
+    await supabase.from("custom_assignments").delete().eq("id", id);
+    setCustomAssignments((prev) => prev.filter((a) => a.id !== id));
+  }, []);
+
+  const exportCustomAssignment = useCallback((assignment) => {
+    const rows = [];
+    (assignment.teams || []).forEach((team) => {
+      rows.push([team.name || "Team"]);
+      rows.push(["Rally lead", members.find((m) => m.id === team.rallyLeadId)?.name || ""]);
+      rows.push(["Rally heroes / ratio", team.rallyNotes || ""]);
+      rows.push(["Joiner heroes / ratio", team.joinerNotes || ""]);
+      rows.push(["Members", ...(team.memberIds || []).map((id) => members.find((m) => m.id === id)?.name || "")]);
+      rows.push([]);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(rows.length ? rows : [["No teams added yet"]]);
+    ws["!cols"] = [{ wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Teams");
+    XLSX.writeFile(wb, `${(assignment.name || "custom-event").replace(/[^a-z0-9]+/gi, "-")}.xlsx`);
   }, [members]);
 
   const upsertParticipation = useCallback(async (eventId, memberId, patch) => {
@@ -1694,8 +2028,12 @@ export default function App() {
           {tab === "leavers" && <LeaversTab members={members} retentionDays={config.leaverRetentionDays ?? 90} rankLabels={config.rankLabels} onReactivate={reactivateMember} onPurgeNow={deleteMember} onEdit={(m) => setMemberModal(m)} />}
           {tab === "growth" && <GrowthTab members={roster} growth={growth} onEditMember={openGrowthFor} />}
           {tab === "events" && <EventsTab events={events} members={members} participation={participation} onOpenEvent={(ev) => setOpenEvent(ev)} />}
-          {tab === "assignments" && <AssignmentsTab canyonAssignments={canyonAssignments} members={members} growth={growth}
-            onCreate={createCanyonAssignment} onChangeSeats={changeCanyonSeats} onExport={exportCanyonAssignment} onDelete={deleteCanyonAssignment} />}
+          {tab === "assignments" && <AssignmentsTab
+            canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} customAssignments={customAssignments}
+            members={members} growth={growth}
+            onCreateCanyon={createCanyonAssignment} onChangeCanyonSeats={changeCanyonSeats} onExportCanyon={exportCanyonAssignment} onDeleteCanyon={deleteCanyonAssignment}
+            onCreateFoundry={createFoundryAssignment} onChangeFoundrySeats={changeFoundrySeats} onToggleFoundryLegion={toggleFoundryLegion} onExportFoundry={exportFoundryAssignment} onDeleteFoundry={deleteFoundryAssignment}
+            onCreateCustom={createCustomAssignment} onChangeCustomTeams={changeCustomTeams} onExportCustom={exportCustomAssignment} onDeleteCustom={deleteCustomAssignment} />}
         </div>
       </div>
       <BottomNav tab={tab} setTab={setTab} leaverCount={leaverCount} />
