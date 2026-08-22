@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
+import JSZip from "jszip";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import {
   LayoutDashboard, Users, TrendingUp, CalendarDays, Plus, X, Pencil,
   Trash2, Snowflake, Search, Settings, Save,
-  ArrowUp, ArrowDown, Minus, Check, UserX, RotateCcw, Ban, Download, Upload, LogOut, Zap, CheckSquare, Swords
+  ArrowUp, ArrowDown, Minus, Check, UserX, RotateCcw, Ban, Download, Upload, LogOut, Zap, CheckSquare, Swords, ClipboardList
 } from "lucide-react";
 import { supabase } from "./supabaseClient.js";
 import Login from "./Login.jsx";
@@ -17,6 +18,15 @@ const CLASSES = [{ key: "infantry", label: "Infantry" }, { key: "marksman", labe
 const EMPTY_CLASS = { troopTier: "", t12Skills: 0, fcTroopLevel: "" };
 
 const EVENT_TYPES = ["Foundry Battle", "Canyon Clash", "Tyrant Battle", "SvS Battle", "Custom"];
+// Matches public/templates/NFG_Canyon_Template.xlsx exactly: team key, display label,
+// seat count, and the row where that team's seats start in the template (column C = Players).
+const CANYON_TEAMS = [
+  { key: "anchor", label: "Anchor Team", seats: 6, startRow: 4 },
+  { key: "harass1", label: "Harassment 1 (Right Side)", seats: 5, startRow: 10 },
+  { key: "harass2", label: "Harassment 2 (Left Side)", seats: 5, startRow: 15 },
+  { key: "harass3", label: "Harassment 3 (Middle / Support)", seats: 5, startRow: 20 },
+  { key: "wall", label: "Wall Team", seats: 14, startRow: 25 },
+];
 const sessionPlaceholder = (type) => (type === "Foundry Battle" || type === "Canyon Clash") ? 'e.g. "Legion 1" or "Legion 2"' : 'e.g. "Team 1" or "Team 2"';
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -69,14 +79,17 @@ const rowToEvent = (r) => ({ id: r.id, date: r.date, type: r.type, name: r.name,
 const eventToRow = (e) => ({ date: e.date, type: e.type, name: e.name, session: e.session || "", mode: e.mode || "score" });
 const rowToPart = (r) => ({ id: r.id, eventId: r.event_id, memberId: r.member_id, signedUp: !!r.signed_up, attended: !!r.attended, partial: !!r.partial, score: r.score ?? "", note: r.note || "", strategy: r.strategy || "" });
 const partToRow = (p) => ({ event_id: p.eventId, member_id: p.memberId, signed_up: !!p.signedUp, attended: !!p.attended, partial: !!p.partial, score: p.score === "" || p.score === undefined ? null : p.score, note: p.note || "", strategy: p.strategy || "" });
+const rowToCanyon = (r) => ({ id: r.id, name: r.name, date: r.date || "", seats: r.seats || {} });
+const canyonToRow = (c) => ({ name: c.name, date: c.date || null, seats: c.seats || {} });
 
 async function fetchAllData() {
-  const [settingsRes, membersRes, growthRes, eventsRes, partRes] = await Promise.all([
+  const [settingsRes, membersRes, growthRes, eventsRes, partRes, canyonRes] = await Promise.all([
     supabase.from("settings").select("*").eq("id", 1).single(),
     supabase.from("members").select("*").order("created_at", { ascending: true }),
     supabase.from("growth").select("*"),
     supabase.from("events").select("*").order("date", { ascending: false }),
     supabase.from("participation").select("*"),
+    supabase.from("canyon_assignments").select("*").order("created_at", { ascending: false }),
   ]);
   const config = settingsRes.data
     ? { allianceName: settingsRes.data.alliance_name || "", leaderName: settingsRes.data.leader_name || "", inactivityDays: settingsRes.data.inactivity_days ?? 10, leaverRetentionDays: settingsRes.data.leaver_retention_days ?? 90, rankLabels: settingsRes.data.rank_labels || {} }
@@ -87,6 +100,7 @@ async function fetchAllData() {
     growth: (growthRes.data || []).map(rowToGrowth),
     events: (eventsRes.data || []).map(rowToEvent),
     participation: (partRes.data || []).map(rowToPart),
+    canyonAssignments: (canyonRes.data || []).map(rowToCanyon),
   };
 }
 
@@ -272,6 +286,7 @@ function BottomNav({ tab, setTab, leaverCount }) {
     { id: "roster", label: "Roster", icon: Users },
     { id: "growth", label: "Growth", icon: TrendingUp },
     { id: "events", label: "Events", icon: CalendarDays },
+    { id: "assignments", label: "Plans", icon: ClipboardList },
     { id: "leavers", label: "Leavers", icon: UserX, count: leaverCount },
   ];
   return (
@@ -293,6 +308,7 @@ function Sidebar({ tab, setTab, allianceName, leaderName, leaverCount }) {
     { id: "leavers", label: "Leavers", icon: UserX, count: leaverCount },
     { id: "growth", label: "Growth", icon: TrendingUp },
     { id: "events", label: "Events", icon: CalendarDays },
+    { id: "assignments", label: "Assignments", icon: ClipboardList },
   ];
   return (
     <div className="wsc-side">
@@ -1093,6 +1109,109 @@ function EventsTab({ events, members, participation, onOpenEvent }) {
     </div>
   );
 }
+function AssignmentModal({ onClose, onSave }) {
+  const [name, setName] = useState("");
+  const [date, setDate] = useState(todayStr());
+  const canSave = name.trim().length > 0;
+  return (
+    <Modal title="New Canyon Clash plan" onClose={onClose}>
+      <div className="wsc-field"><label className="wsc-label">Name</label>
+        <input className="wsc-input" value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "Canyon Clash — Aug 28"' /></div>
+      <div className="wsc-field"><label className="wsc-label">Date</label>
+        <input className="wsc-input" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button className="wsc-btn" onClick={onClose}>Cancel</button>
+        <button className="wsc-btn wsc-btn-primary" disabled={!canSave} style={{ opacity: canSave ? 1 : 0.5 }}
+          onClick={() => canSave && onSave({ id: uid(), name, date, seats: {} })}><Save size={13} /> Create</button>
+      </div>
+    </Modal>
+  );
+}
+function CanyonEditor({ assignment, members, growth, onChangeSeats, onExport, onDelete, onBack }) {
+  const roster = members.filter((m) => m.status !== "left");
+  const powerByMember = useMemo(() => { const map = {}; growth.forEach((g) => { map[g.memberId] = g.power; }); return map; }, [growth]);
+  const seats = assignment.seats || {};
+  const usedIds = new Set(Object.values(seats).flat().filter(Boolean));
+  const setSeat = (teamKey, idx, memberId) => {
+    const arr = [...(seats[teamKey] || [])];
+    arr[idx] = memberId || null;
+    onChangeSeats({ ...seats, [teamKey]: arr });
+  };
+  const filledCount = [...usedIds].length;
+  const totalSeats = CANYON_TEAMS.reduce((s, t) => s + t.seats, 0);
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+        <button className="wsc-btn wsc-btn-sm" onClick={onBack}>&larr; Back to plans</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <span style={{ fontSize: 12.5, color: "var(--steel-dim)", alignSelf: "center" }}>{filledCount} / {totalSeats} seats filled</span>
+          <button className="wsc-btn wsc-btn-sm wsc-btn-danger" onClick={onDelete}><Trash2 size={12} /> Delete</button>
+          <button className="wsc-btn wsc-btn-primary" onClick={onExport}><Download size={13} /> Export to Excel</button>
+        </div>
+      </div>
+      {CANYON_TEAMS.map((team) => (
+        <div key={team.key} className="wsc-card" style={{ marginBottom: 12 }}>
+          <div className="wsc-stat-label" style={{ marginBottom: 10 }}>{team.label} <span style={{ color: "var(--steel-dim)", fontWeight: 400 }}>({team.seats} seats)</span></div>
+          {Array.from({ length: team.seats }).map((_, i) => {
+            const currentId = seats[team.key]?.[i] || "";
+            return (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+                <span style={{ width: 22, textAlign: "right", color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{i + 1}</span>
+                <select className="wsc-select" value={currentId} onChange={(e) => setSeat(team.key, i, e.target.value)}>
+                  <option value="">— empty —</option>
+                  {roster.filter((m) => !usedIds.has(m.id) || m.id === currentId).map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}{powerByMember[m.id] ? ` (${fmtNum(powerByMember[m.id])})` : ""}</option>
+                  ))}
+                </select>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+function AssignmentsTab({ canyonAssignments, members, growth, onCreate, onChangeSeats, onExport, onDelete }) {
+  const [showNew, setShowNew] = useState(false);
+  const [openId, setOpenId] = useState(null);
+  const open = canyonAssignments.find((a) => a.id === openId);
+  if (open) {
+    return (
+      <CanyonEditor assignment={open} members={members} growth={growth}
+        onChangeSeats={(seats) => onChangeSeats(open.id, seats)}
+        onExport={() => onExport(open)}
+        onDelete={() => { onDelete(open.id); setOpenId(null); }}
+        onBack={() => setOpenId(null)} />
+    );
+  }
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+        <button className="wsc-btn wsc-btn-primary" onClick={() => setShowNew(true)}><Plus size={13} /> New Canyon Clash plan</button>
+      </div>
+      <div style={{ fontSize: 12.5, color: "var(--steel-dim)", marginBottom: 14 }}>Foundry Battle and Custom event planning are coming soon — Canyon Clash is ready now.</div>
+      {canyonAssignments.length === 0 ? (
+        <div className="wsc-card"><EmptyState title="No Canyon Clash plans yet" body='Click "New Canyon Clash plan" to start assigning members to teams.' /></div>
+      ) : (
+        <div className="wsc-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))" }}>
+          {canyonAssignments.map((a) => {
+            const filled = Object.values(a.seats || {}).flat().filter(Boolean).length;
+            const total = CANYON_TEAMS.reduce((s, t) => s + t.seats, 0);
+            return (
+              <div key={a.id} className="wsc-card" style={{ cursor: "pointer" }} onClick={() => setOpenId(a.id)}>
+                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 3 }}>{a.name}</div>
+                <div style={{ fontSize: 12, color: "var(--steel-dim)", marginBottom: 10 }}>{a.date ? fmtDate(a.date) : "No date set"}</div>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--frost)" }}>{filled} / {total} seats filled</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {showNew && <AssignmentModal onClose={() => setShowNew(false)} onSave={(a) => { onCreate(a); setShowNew(false); }} />}
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
   const [loading, setLoading] = useState(true);
@@ -1103,6 +1222,7 @@ export default function App() {
   const [growth, setGrowth] = useState([]);
   const [events, setEvents] = useState([]);
   const [participation, setParticipation] = useState([]);
+  const [canyonAssignments, setCanyonAssignments] = useState([]);
 
   const [showConfig, setShowConfig] = useState(false);
   const [memberModal, setMemberModal] = useState(null);
@@ -1142,7 +1262,7 @@ export default function App() {
       setLoading(true);
       setLoadError("");
       try {
-        const { config: cfg, members: mem, growth: gr, events: ev, participation: part } = await fetchAllData();
+        const { config: cfg, members: mem, growth: gr, events: ev, participation: part, canyonAssignments: canyon } = await fetchAllData();
 
         const retention = cfg.leaverRetentionDays ?? 90;
         const purgedIds = mem.filter((m) => m.status === "left" && daysAgo(m.leftDate) > retention).map((m) => m.id);
@@ -1155,7 +1275,7 @@ export default function App() {
           finalPart = part.filter((p) => !purgedIds.includes(p.memberId));
         }
         if (cancelled) return;
-        setConfig(cfg); setMembers(finalMembers); setGrowth(finalGrowth); setEvents(ev); setParticipation(finalPart);
+        setConfig(cfg); setMembers(finalMembers); setGrowth(finalGrowth); setEvents(ev); setParticipation(finalPart); setCanyonAssignments(canyon);
       } catch (err) {
         console.error("Failed to load alliance data:", err);
         if (!cancelled) setLoadError(err?.message || "Failed to load data. Check your connection and try refreshing.");
@@ -1240,6 +1360,74 @@ export default function App() {
     setParticipation((prev) => prev.filter((p) => p.eventId !== id));
     setOpenEvent(null);
   }, []);
+
+  const createCanyonAssignment = useCallback(async (a) => {
+    const { data, error } = await supabase.from("canyon_assignments").insert(canyonToRow(a)).select().single();
+    if (!error && data) setCanyonAssignments((prev) => [rowToCanyon(data), ...prev]);
+    else if (error) window.alert(`Couldn't create plan: ${error.message}`);
+  }, []);
+
+  const changeCanyonSeats = useCallback(async (id, seats) => {
+    setCanyonAssignments((prev) => prev.map((a) => a.id === id ? { ...a, seats } : a)); // optimistic
+    const { error } = await supabase.from("canyon_assignments").update({ seats }).eq("id", id);
+    if (error) window.alert(`Couldn't save seat change: ${error.message}`);
+  }, []);
+
+  const deleteCanyonAssignment = useCallback(async (id) => {
+    await supabase.from("canyon_assignments").delete().eq("id", id);
+    setCanyonAssignments((prev) => prev.filter((a) => a.id !== id));
+  }, []);
+
+  const exportCanyonAssignment = useCallback(async (assignment) => {
+    try {
+      const res = await fetch("templates/NFG_Canyon_Template.xlsx");
+      if (!res.ok) throw new Error("Template not found at public/templates/NFG_Canyon_Template.xlsx");
+      const buf = await res.arrayBuffer();
+      const zip = await JSZip.loadAsync(buf);
+      const sheetFile = zip.file("xl/worksheets/sheet1.xml");
+      if (!sheetFile) throw new Error("Unexpected template structure — sheet1.xml not found");
+      let sheetXml = await sheetFile.async("string");
+
+      const escapeXml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      const seats = assignment.seats || {};
+
+      for (const team of CANYON_TEAMS) {
+        const arr = seats[team.key] || [];
+        for (let i = 0; i < team.seats; i++) {
+          const memberId = arr[i];
+          if (!memberId) continue;
+          const member = members.find((m) => m.id === memberId);
+          if (!member) continue;
+          const row = team.startRow + i;
+          const cellRef = `C${row}`;
+          const nameXml = `<is><t xml:space="preserve">${escapeXml(member.name)}</t></is>`;
+          const replaceWith = (attrs) => {
+            const styleMatch = attrs.match(/s="(\d+)"/);
+            const s = styleMatch ? ` s="${styleMatch[1]}"` : "";
+            return `<c r="${cellRef}"${s} t="inlineStr">${nameXml}</c>`;
+          };
+          const selfClose = new RegExp(`<c r="${cellRef}"([^>]*)/>`);
+          const withBody = new RegExp(`<c r="${cellRef}"([^>]*)>.*?</c>`);
+          if (selfClose.test(sheetXml)) sheetXml = sheetXml.replace(selfClose, (_, attrs) => replaceWith(attrs));
+          else if (withBody.test(sheetXml)) sheetXml = sheetXml.replace(withBody, (_, attrs) => replaceWith(attrs));
+        }
+      }
+
+      zip.file("xl/worksheets/sheet1.xml", sheetXml);
+      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(assignment.name || "canyon-clash").replace(/[^a-z0-9]+/gi, "-")}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Canyon export failed:", err);
+      window.alert(`Couldn't export: ${err.message}`);
+    }
+  }, [members]);
 
   const upsertParticipation = useCallback(async (eventId, memberId, patch) => {
     const existing = participation.find((p) => p.eventId === eventId && p.memberId === memberId);
@@ -1450,7 +1638,7 @@ export default function App() {
             <div className="wsc-brand-mobile"><Snowflake size={12} />{config.allianceName || "Alliance"}</div>
             <div className="wsc-title">
               {tab === "dashboard" && "Dashboard"}{tab === "roster" && "Roster"}{tab === "leavers" && "Leavers"}
-              {tab === "growth" && "Growth"}{tab === "events" && "Events"}
+              {tab === "growth" && "Growth"}{tab === "events" && "Events"}{tab === "assignments" && "Assignments"}
             </div>
             <div className="wsc-title-sub">{roster.length} members tracked{leaverCount > 0 ? ` · ${leaverCount} former` : ""}</div>
           </div>
@@ -1468,6 +1656,8 @@ export default function App() {
           {tab === "leavers" && <LeaversTab members={members} retentionDays={config.leaverRetentionDays ?? 90} rankLabels={config.rankLabels} onReactivate={reactivateMember} onPurgeNow={deleteMember} onEdit={(m) => setMemberModal(m)} />}
           {tab === "growth" && <GrowthTab members={roster} growth={growth} onEditMember={openGrowthFor} />}
           {tab === "events" && <EventsTab events={events} members={members} participation={participation} onOpenEvent={(ev) => setOpenEvent(ev)} />}
+          {tab === "assignments" && <AssignmentsTab canyonAssignments={canyonAssignments} members={members} growth={growth}
+            onCreate={createCanyonAssignment} onChangeSeats={changeCanyonSeats} onExport={exportCanyonAssignment} onDelete={deleteCanyonAssignment} />}
         </div>
       </div>
       <BottomNav tab={tab} setTab={setTab} leaverCount={leaverCount} />
