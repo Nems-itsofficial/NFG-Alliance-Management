@@ -100,8 +100,8 @@ const rowToPart = (r) => ({ id: r.id, eventId: r.event_id, memberId: r.member_id
 const partToRow = (p) => ({ event_id: p.eventId, member_id: p.memberId, signed_up: !!p.signedUp, attended: !!p.attended, partial: !!p.partial, score: p.score === "" || p.score === undefined ? null : p.score, note: p.note || "", strategy: p.strategy || "" });
 const rowToCanyon = (r) => ({ id: r.id, name: r.name, date: r.date || "", seats: r.seats || {} });
 const canyonToRow = (c) => ({ name: c.name, date: c.date || null, seats: c.seats || {} });
-const rowToFoundry = (r) => ({ id: r.id, name: r.name, date: r.date || "", lg1Active: r.lg1_active ?? true, lg2Active: r.lg2_active ?? false, lg1Seats: r.lg1_seats || {}, lg2Seats: r.lg2_seats || {} });
-const foundryToRow = (f) => ({ name: f.name, date: f.date || null, lg1_active: !!f.lg1Active, lg2_active: !!f.lg2Active, lg1_seats: f.lg1Seats || {}, lg2_seats: f.lg2Seats || {} });
+const rowToFoundry = (r) => ({ id: r.id, name: r.name, date: r.date || "", legion: r.legion || "LG1", seats: r.seats || {} });
+const foundryToRow = (f) => ({ name: f.name, date: f.date || null, legion: f.legion || "LG1", seats: f.seats || {} });
 const rowToCustom = (r) => ({ id: r.id, name: r.name, date: r.date || "", teams: r.teams || [] });
 const customToRow = (c) => ({ name: c.name, date: c.date || null, teams: c.teams || [] });
 
@@ -1136,28 +1136,44 @@ function EventsTab({ events, members, participation, onOpenEvent }) {
     </div>
   );
 }
-function AssignmentModal({ type, onClose, onSave }) {
+function AssignmentModal({ onClose, onSave }) {
+  const [type, setType] = useState("canyon");
   const [name, setName] = useState("");
   const [date, setDate] = useState(todayStr());
+  const [legion, setLegion] = useState("LG1");
   const canSave = name.trim().length > 0;
-  const titles = { canyon: "New Canyon Clash plan", foundry: "New Foundry Battle plan", custom: "New custom event plan" };
   const placeholders = { canyon: 'e.g. "Canyon Clash — Aug 28"', foundry: 'e.g. "Foundry Battle — Aug 30"', custom: 'e.g. "Alliance Championship — Sep 2"' };
   const build = () => {
     const base = { id: uid(), name, date };
-    if (type === "foundry") return { ...base, lg1Active: true, lg2Active: false, lg1Seats: {}, lg2Seats: {} };
+    if (type === "foundry") return { ...base, legion, seats: {} };
     if (type === "custom") return { ...base, teams: [] };
     return { ...base, seats: {} };
   };
   return (
-    <Modal title={titles[type]} onClose={onClose}>
+    <Modal title="Create new event plan" onClose={onClose}>
+      <div className="wsc-field"><label className="wsc-label">Type</label>
+        <select className="wsc-select" value={type} onChange={(e) => setType(e.target.value)}>
+          <option value="canyon">Canyon Clash</option>
+          <option value="foundry">Foundry Battle</option>
+          <option value="custom">Custom event</option>
+        </select>
+      </div>
       <div className="wsc-field"><label className="wsc-label">Name</label>
         <input className="wsc-input" value={name} onChange={(e) => setName(e.target.value)} placeholder={placeholders[type]} /></div>
+      {type === "foundry" && (
+        <div className="wsc-field"><label className="wsc-label">Legion</label>
+          <select className="wsc-select" value={legion} onChange={(e) => setLegion(e.target.value)}>
+            <option value="LG1">Legion 1</option>
+            <option value="LG2">Legion 2</option>
+          </select>
+        </div>
+      )}
       <div className="wsc-field"><label className="wsc-label">Date</label>
         <input className="wsc-input" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
         <button className="wsc-btn" onClick={onClose}>Cancel</button>
         <button className="wsc-btn wsc-btn-primary" disabled={!canSave} style={{ opacity: canSave ? 1 : 0.5 }}
-          onClick={() => canSave && onSave(build())}><Save size={13} /> Create</button>
+          onClick={() => canSave && onSave(type, build())}><Save size={13} /> Create</button>
       </div>
     </Modal>
   );
@@ -1244,62 +1260,39 @@ function CanyonEditor({ assignment, members, growth, onChangeSeats, onExport, on
     </div>
   );
 }
-function FoundryEditor({ assignment, members, growth, onChangeSeats, onToggleLegion, onExport, onDelete, onBack }) {
+function FoundryEditor({ assignment, members, growth, onChangeSeats, onExport, onDelete, onBack }) {
   const roster = members.filter((m) => m.status !== "left");
   const powerByMember = useMemo(() => { const map = {}; growth.forEach((g) => { map[g.memberId] = g.power; }); return map; }, [growth]);
-  const totalPerLegion = FOUNDRY_BUILDINGS.reduce((s, b) => s + b.seats, 0);
-
-  const renderLegion = (legionLabel, field, seats) => {
-    const setSeat = (buildingKey, idx, memberId) => {
-      const arr = [...(seats[buildingKey] || [])];
-      arr[idx] = memberId || null;
-      onChangeSeats(field, { ...seats, [buildingKey]: arr });
-    };
-    const filled = Object.values(seats).flat().filter(Boolean).length;
-    return (
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div className="wsc-stat-label" style={{ margin: 0 }}>{legionLabel}</div>
-          <span style={{ fontSize: 12, color: "var(--steel-dim)", fontFamily: "var(--font-mono)" }}>{filled} / {totalPerLegion} filled</span>
-        </div>
-        {FOUNDRY_BUILDINGS.map((b) => (
-          <div key={b.key} className="wsc-card" style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8, color: "var(--steel)" }}>{b.label} <span style={{ color: "var(--steel-dim)", fontWeight: 400 }}>({b.seats} seats)</span></div>
-            {Array.from({ length: b.seats }).map((_, i) => (
-              <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-                <span style={{ width: 22, textAlign: "right", color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{i + 1}</span>
-                <SeatPicker value={seats[b.key]?.[i] || ""} roster={roster} usedIds={new Set()} powerByMember={powerByMember}
-                  onSelect={(id) => setSeat(b.key, i, id)} />
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-    );
+  const seats = assignment.seats || {};
+  const totalSeats = FOUNDRY_BUILDINGS.reduce((s, b) => s + b.seats, 0);
+  const filled = Object.values(seats).flat().filter(Boolean).length;
+  const setSeat = (buildingKey, idx, memberId) => {
+    const arr = [...(seats[buildingKey] || [])];
+    arr[idx] = memberId || null;
+    onChangeSeats({ ...seats, [buildingKey]: arr });
   };
-
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
         <button className="wsc-btn wsc-btn-sm" onClick={onBack}>&larr; Back to plans</button>
         <div style={{ display: "flex", gap: 8 }}>
+          <span style={{ fontSize: 12.5, color: "var(--steel-dim)", alignSelf: "center" }}>{filled} / {totalSeats} seats filled · {assignment.legion === "LG2" ? "Legion 2" : "Legion 1"}</span>
           <button className="wsc-btn wsc-btn-sm wsc-btn-danger" onClick={onDelete}><Trash2 size={12} /> Delete</button>
           <button className="wsc-btn wsc-btn-primary" onClick={onExport}><Download size={13} /> Export to Excel</button>
         </div>
       </div>
-      <div className="wsc-card" style={{ marginBottom: 14, display: "flex", gap: 20 }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
-          <input type="checkbox" className="wsc-checkbox" checked={assignment.lg1Active} onChange={(e) => onToggleLegion("lg1Active", e.target.checked)} /> Use Legion 1
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
-          <input type="checkbox" className="wsc-checkbox" checked={assignment.lg2Active} onChange={(e) => onToggleLegion("lg2Active", e.target.checked)} /> Use Legion 2
-        </label>
-      </div>
-      {assignment.lg1Active && renderLegion("Legion 1", "lg1Seats", assignment.lg1Seats || {})}
-      {assignment.lg2Active && renderLegion("Legion 2", "lg2Seats", assignment.lg2Seats || {})}
-      {!assignment.lg1Active && !assignment.lg2Active && (
-        <div className="wsc-card"><EmptyState title="No legion selected" body="Check at least one legion above to start assigning members." /></div>
-      )}
+      {FOUNDRY_BUILDINGS.map((b) => (
+        <div key={b.key} className="wsc-card" style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8, color: "var(--steel)" }}>{b.label} <span style={{ color: "var(--steel-dim)", fontWeight: 400 }}>({b.seats} seats)</span></div>
+          {Array.from({ length: b.seats }).map((_, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+              <span style={{ width: 22, textAlign: "right", color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{i + 1}</span>
+              <SeatPicker value={seats[b.key]?.[i] || ""} roster={roster} usedIds={new Set()} powerByMember={powerByMember}
+                onSelect={(id) => setSeat(b.key, i, id)} />
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }
@@ -1383,9 +1376,8 @@ function CustomEditor({ assignment, members, growth, onChangeTeams, onExport, on
 }
 function AssignmentsTab({ canyonAssignments, foundryAssignments, customAssignments, members, growth,
   onCreateCanyon, onChangeCanyonSeats, onExportCanyon, onDeleteCanyon,
-  onCreateFoundry, onChangeFoundrySeats, onToggleFoundryLegion, onExportFoundry, onDeleteFoundry,
+  onCreateFoundry, onChangeFoundrySeats, onExportFoundry, onDeleteFoundry,
   onCreateCustom, onChangeCustomTeams, onExportCustom, onDeleteCustom }) {
-  const [type, setType] = useState("canyon");
   const [showNew, setShowNew] = useState(false);
   const [openCanyonId, setOpenCanyonId] = useState(null);
   const [openFoundryId, setOpenFoundryId] = useState(null);
@@ -1404,8 +1396,7 @@ function AssignmentsTab({ canyonAssignments, foundryAssignments, customAssignmen
   }
   if (openFoundry) {
     return <FoundryEditor assignment={openFoundry} members={members} growth={growth}
-      onChangeSeats={(field, seats) => onChangeFoundrySeats(openFoundry.id, field, seats)}
-      onToggleLegion={(field, active) => onToggleFoundryLegion(openFoundry.id, field, active)}
+      onChangeSeats={(seats) => onChangeFoundrySeats(openFoundry.id, seats)}
       onExport={() => onExportFoundry(openFoundry)}
       onDelete={() => { onDeleteFoundry(openFoundry.id); setOpenFoundryId(null); }}
       onBack={() => setOpenFoundryId(null)} />;
@@ -1418,42 +1409,46 @@ function AssignmentsTab({ canyonAssignments, foundryAssignments, customAssignmen
       onBack={() => setOpenCustomId(null)} />;
   }
 
-  const listFor = { canyon: canyonAssignments, foundry: foundryAssignments, custom: customAssignments }[type];
-  const labelFor = { canyon: "Canyon Clash", foundry: "Foundry Battle", custom: "Custom event" };
+  const combined = [
+    ...canyonAssignments.map((a) => ({ ...a, _type: "canyon" })),
+    ...foundryAssignments.map((a) => ({ ...a, _type: "foundry" })),
+    ...customAssignments.map((a) => ({ ...a, _type: "custom" })),
+  ].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const typeLabel = { canyon: "Canyon Clash", foundry: "Foundry Battle", custom: "Custom event" };
+  const typeColor = { canyon: "#6FCBEA", foundry: "#E8A33D", custom: "#B14EFF" };
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ display: "flex", gap: 8 }}>
-          {["canyon", "foundry", "custom"].map((t) => (
-            <button key={t} className={`wsc-chip ${type === t ? "active" : ""}`} onClick={() => setType(t)}>{labelFor[t]}</button>
-          ))}
-        </div>
-        <button className="wsc-btn wsc-btn-primary" onClick={() => setShowNew(true)}><Plus size={13} /> New {labelFor[type]} plan</button>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+        <button className="wsc-btn wsc-btn-primary" onClick={() => setShowNew(true)}><Plus size={13} /> Create new event plan</button>
       </div>
-      {listFor.length === 0 ? (
-        <div className="wsc-card"><EmptyState title={`No ${labelFor[type]} plans yet`} body={`Click "New ${labelFor[type]} plan" to get started.`} /></div>
+      {combined.length === 0 ? (
+        <div className="wsc-card"><EmptyState title="No event plans yet" body='Click "Create new event plan" to assign members to teams for Canyon Clash, Foundry Battle, or a custom event.' /></div>
       ) : (
         <div className="wsc-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))" }}>
-          {listFor.map((a) => {
+          {combined.map((a) => {
             let summary;
-            if (type === "canyon") {
+            if (a._type === "canyon") {
               const filled = Object.values(a.seats || {}).flat().filter(Boolean).length;
               const total = CANYON_TEAMS.reduce((s, t) => s + t.seats, 0);
               summary = `${filled} / ${total} seats filled`;
-            } else if (type === "foundry") {
-              const l1 = Object.values(a.lg1Seats || {}).flat().filter(Boolean).length;
-              const l2 = Object.values(a.lg2Seats || {}).flat().filter(Boolean).length;
-              const legions = (a.lg1Active ? 1 : 0) + (a.lg2Active ? 1 : 0) || 1;
-              summary = `${l1 + l2} / ${FOUNDRY_BUILDINGS.reduce((s, b) => s + b.seats, 0) * legions} seats filled`;
+            } else if (a._type === "foundry") {
+              const filled = Object.values(a.seats || {}).flat().filter(Boolean).length;
+              const total = FOUNDRY_BUILDINGS.reduce((s, b) => s + b.seats, 0);
+              summary = `${filled} / ${total} seats filled`;
             } else {
               const teamCount = (a.teams || []).length;
               summary = `${teamCount} team${teamCount !== 1 ? "s" : ""}`;
             }
-            const onClick = () => { if (type === "canyon") setOpenCanyonId(a.id); else if (type === "foundry") setOpenFoundryId(a.id); else setOpenCustomId(a.id); };
+            const onClick = () => { if (a._type === "canyon") setOpenCanyonId(a.id); else if (a._type === "foundry") setOpenFoundryId(a.id); else setOpenCustomId(a.id); };
             return (
-              <div key={a.id} className="wsc-card" style={{ cursor: "pointer" }} onClick={onClick}>
-                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 3 }}>{a.name}</div>
+              <div key={`${a._type}-${a.id}`} className="wsc-card" style={{ cursor: "pointer" }} onClick={onClick}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 3 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{a.name}</div>
+                  <span className="wsc-role-badge" style={{ color: typeColor[a._type], borderColor: typeColor[a._type], boxShadow: `0 0 6px ${typeColor[a._type]}66, 0 0 1px ${typeColor[a._type]}`, fontSize: 9.5, flexShrink: 0 }}>
+                    {typeLabel[a._type]}
+                  </span>
+                </div>
                 <div style={{ fontSize: 12, color: "var(--steel-dim)", marginBottom: 10 }}>{a.date ? fmtDate(a.date) : "No date set"}</div>
                 <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--frost)" }}>{summary}</div>
               </div>
@@ -1461,7 +1456,7 @@ function AssignmentsTab({ canyonAssignments, foundryAssignments, customAssignmen
           })}
         </div>
       )}
-      {showNew && <AssignmentModal type={type} onClose={() => setShowNew(false)} onSave={(a) => {
+      {showNew && <AssignmentModal onClose={() => setShowNew(false)} onSave={(type, a) => {
         if (type === "canyon") onCreateCanyon(a); else if (type === "foundry") onCreateFoundry(a); else onCreateCustom(a);
         setShowNew(false);
       }} />}
@@ -1694,18 +1689,10 @@ export default function App() {
     else if (error) window.alert(`Couldn't create plan: ${error.message}`);
   }, []);
 
-  const changeFoundrySeats = useCallback(async (id, field, seats) => {
-    setFoundryAssignments((prev) => prev.map((a) => a.id === id ? { ...a, [field]: seats } : a));
-    const column = field === "lg1Seats" ? "lg1_seats" : "lg2_seats";
-    const { error } = await supabase.from("foundry_assignments").update({ [column]: seats }).eq("id", id);
+  const changeFoundrySeats = useCallback(async (id, seats) => {
+    setFoundryAssignments((prev) => prev.map((a) => a.id === id ? { ...a, seats } : a));
+    const { error } = await supabase.from("foundry_assignments").update({ seats }).eq("id", id);
     if (error) window.alert(`Couldn't save seat change: ${error.message}`);
-  }, []);
-
-  const toggleFoundryLegion = useCallback(async (id, field, active) => {
-    setFoundryAssignments((prev) => prev.map((a) => a.id === id ? { ...a, [field]: active } : a));
-    const column = field === "lg1Active" ? "lg1_active" : "lg2_active";
-    const { error } = await supabase.from("foundry_assignments").update({ [column]: active }).eq("id", id);
-    if (error) window.alert(`Couldn't save: ${error.message}`);
   }, []);
 
   const deleteFoundryAssignment = useCallback(async (id) => {
@@ -1721,36 +1708,33 @@ export default function App() {
       const zip = await JSZip.loadAsync(buf);
       const escapeXml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-      const injectLegion = async (sheetPath, seats) => {
-        const file = zip.file(sheetPath);
-        if (!file) return;
-        let xml = await file.async("string");
-        for (const b of FOUNDRY_BUILDINGS) {
-          const arr = seats[b.key] || [];
-          for (let i = 0; i < b.seats; i++) {
-            const memberId = arr[i];
-            if (!memberId) continue;
-            const member = members.find((m) => m.id === memberId);
-            if (!member) continue;
-            const row = b.startRow + i;
-            const cellRef = `${b.col}${row}`;
-            const nameXml = `<is><t xml:space="preserve">${escapeXml(member.name)}</t></is>`;
-            const replaceWith = (attrs) => {
-              const sm = attrs.match(/s="(\d+)"/);
-              const s = sm ? ` s="${sm[1]}"` : "";
-              return `<c r="${cellRef}"${s} t="inlineStr">${nameXml}</c>`;
-            };
-            const selfClose = new RegExp(`<c r="${cellRef}"([^>]*)/>`);
-            const withBody = new RegExp(`<c r="${cellRef}"([^>]*)>.*?</c>`);
-            if (selfClose.test(xml)) xml = xml.replace(selfClose, (_, attrs) => replaceWith(attrs));
-            else if (withBody.test(xml)) xml = xml.replace(withBody, (_, attrs) => replaceWith(attrs));
-          }
+      const sheetPath = assignment.legion === "LG2" ? "xl/worksheets/sheet2.xml" : "xl/worksheets/sheet1.xml";
+      const file = zip.file(sheetPath);
+      if (!file) throw new Error("Unexpected template structure");
+      let xml = await file.async("string");
+      const seats = assignment.seats || {};
+      for (const b of FOUNDRY_BUILDINGS) {
+        const arr = seats[b.key] || [];
+        for (let i = 0; i < b.seats; i++) {
+          const memberId = arr[i];
+          if (!memberId) continue;
+          const member = members.find((m) => m.id === memberId);
+          if (!member) continue;
+          const row = b.startRow + i;
+          const cellRef = `${b.col}${row}`;
+          const nameXml = `<is><t xml:space="preserve">${escapeXml(member.name)}</t></is>`;
+          const replaceWith = (attrs) => {
+            const sm = attrs.match(/s="(\d+)"/);
+            const s = sm ? ` s="${sm[1]}"` : "";
+            return `<c r="${cellRef}"${s} t="inlineStr">${nameXml}</c>`;
+          };
+          const selfClose = new RegExp(`<c r="${cellRef}"([^>]*)/>`);
+          const withBody = new RegExp(`<c r="${cellRef}"([^>]*)>.*?</c>`);
+          if (selfClose.test(xml)) xml = xml.replace(selfClose, (_, attrs) => replaceWith(attrs));
+          else if (withBody.test(xml)) xml = xml.replace(withBody, (_, attrs) => replaceWith(attrs));
         }
-        zip.file(sheetPath, xml);
-      };
-
-      if (assignment.lg1Active) await injectLegion("xl/worksheets/sheet1.xml", assignment.lg1Seats || {});
-      if (assignment.lg2Active) await injectLegion("xl/worksheets/sheet2.xml", assignment.lg2Seats || {});
+      }
+      zip.file(sheetPath, xml);
 
       const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
       const url = URL.createObjectURL(blob);
@@ -2032,7 +2016,7 @@ export default function App() {
             canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} customAssignments={customAssignments}
             members={members} growth={growth}
             onCreateCanyon={createCanyonAssignment} onChangeCanyonSeats={changeCanyonSeats} onExportCanyon={exportCanyonAssignment} onDeleteCanyon={deleteCanyonAssignment}
-            onCreateFoundry={createFoundryAssignment} onChangeFoundrySeats={changeFoundrySeats} onToggleFoundryLegion={toggleFoundryLegion} onExportFoundry={exportFoundryAssignment} onDeleteFoundry={deleteFoundryAssignment}
+            onCreateFoundry={createFoundryAssignment} onChangeFoundrySeats={changeFoundrySeats} onExportFoundry={exportFoundryAssignment} onDeleteFoundry={deleteFoundryAssignment}
             onCreateCustom={createCustomAssignment} onChangeCustomTeams={changeCustomTeams} onExportCustom={exportCustomAssignment} onDeleteCustom={deleteCustomAssignment} />}
         </div>
       </div>
