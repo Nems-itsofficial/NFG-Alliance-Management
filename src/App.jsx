@@ -1127,6 +1127,48 @@ function AssignmentModal({ onClose, onSave }) {
     </Modal>
   );
 }
+function SeatPicker({ value, roster, usedIds, powerByMember, onSelect }) {
+  const [query, setQuery] = useState("");
+  const [editing, setEditing] = useState(false);
+  const current = roster.find((m) => m.id === value) || null;
+
+  if (current && !editing) {
+    return (
+      <div style={{ display: "flex", gap: 6, flex: 1 }}>
+        <div className="wsc-input" style={{ flex: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}
+          onClick={() => { setEditing(true); setQuery(""); }}>
+          <span>{current.name}</span>
+          {powerByMember[current.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{fmtNum(powerByMember[current.id])}</span> : null}
+        </div>
+        <button className="wsc-btn wsc-btn-icon" onClick={() => onSelect("")} aria-label="Clear seat"><X size={12} color="var(--steel-dim)" /></button>
+      </div>
+    );
+  }
+
+  const candidates = query
+    ? roster.filter((m) => (!usedIds.has(m.id) || m.id === value) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 15)
+    : [];
+  return (
+    <div style={{ position: "relative", flex: 1 }}>
+      <input className="wsc-input" placeholder="Search a member…" value={query} autoFocus={editing}
+        onChange={(e) => setQuery(e.target.value)}
+        onBlur={() => setTimeout(() => setEditing(false), 150)} />
+      {query && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 8, marginTop: 4, maxHeight: 180, overflowY: "auto", zIndex: 20 }}>
+          {candidates.length === 0 ? (
+            <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>No matches</div>
+          ) : candidates.map((m) => (
+            <div key={m.id} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, display: "flex", justifyContent: "space-between" }}
+              onMouseDown={() => { onSelect(m.id); setQuery(""); setEditing(false); }}>
+              <span>{m.name}</span>
+              {powerByMember[m.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{fmtNum(powerByMember[m.id])}</span> : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 function CanyonEditor({ assignment, members, growth, onChangeSeats, onExport, onDelete, onBack }) {
   const roster = members.filter((m) => m.status !== "left");
   const powerByMember = useMemo(() => { const map = {}; growth.forEach((g) => { map[g.memberId] = g.power; }); return map; }, [growth]);
@@ -1157,12 +1199,8 @@ function CanyonEditor({ assignment, members, growth, onChangeSeats, onExport, on
             return (
               <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
                 <span style={{ width: 22, textAlign: "right", color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{i + 1}</span>
-                <select className="wsc-select" value={currentId} onChange={(e) => setSeat(team.key, i, e.target.value)}>
-                  <option value="">— empty —</option>
-                  {roster.filter((m) => !usedIds.has(m.id) || m.id === currentId).map((m) => (
-                    <option key={m.id} value={m.id}>{m.name}{powerByMember[m.id] ? ` (${fmtNum(powerByMember[m.id])})` : ""}</option>
-                  ))}
-                </select>
+                <SeatPicker value={currentId} roster={roster} usedIds={usedIds} powerByMember={powerByMember}
+                  onSelect={(id) => setSeat(team.key, i, id)} />
               </div>
             );
           })}
