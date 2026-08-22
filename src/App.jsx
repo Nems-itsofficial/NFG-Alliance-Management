@@ -212,10 +212,10 @@ const STYLE = `
 .wsc-power-sub { font-size:12.5px; color:var(--steel-dim); margin-top:2px; }
 `;
 
-function RankBadge({ rank, label }) {
+function RankBadge({ rank }) {
   const colors = { R5: "#F2C94C", R4: "#6FCBEA", R3: "#8397AA", R2: "#5C7086", R1: "#3E4E5E" };
   const c = colors[rank] || "#5C7086";
-  return <span className="wsc-badge" style={{ background: `${c}22`, color: c }}>{label || rank}</span>;
+  return <span className="wsc-badge" style={{ background: `${c}22`, color: c }}>{rank}</span>;
 }
 const NEON_COLORS = ["#39FF88", "#00E5FF", "#FF3EC8", "#FFD23F", "#B14EFF", "#FF5F5F", "#4EFFE0"];
 const roleColor = (label) => {
@@ -600,15 +600,18 @@ function RankGroup({ rank, rankLabel, list, selectMode, selected, onToggleOne, o
   return (
     <div className="wsc-card" style={{ padding: 0, overflow: "hidden", marginBottom: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: "1px solid var(--border-soft)" }}>
-        <RankBadge rank={rank} label={rankLabel} />
+        <RankBadge rank={rank} />
+        {rankLabel && <span style={{ fontSize: 13, color: "var(--frost)", fontWeight: 600 }}>{rankLabel}</span>}
+        <span style={{ fontSize: 13, color: "var(--steel-dim)" }}>·</span>
         <span style={{ fontSize: 13, color: "var(--steel-dim)" }}>{list.length} member{list.length !== 1 ? "s" : ""}</span>
       </div>
       <div style={{ overflowX: "auto" }}>
-        <table className="wsc-table" style={{ tableLayout: "fixed", width: "auto" }}>
+        <table className="wsc-table" style={{ tableLayout: "fixed", width: "100%" }}>
           <thead><tr>
             {selectMode && <th style={{ width: 30 }}><input type="checkbox" className="wsc-checkbox" checked={allSelected} onChange={() => onToggleAllInGroup(list)} /></th>}
             <th style={{ width: 200 }}>Name</th>
             {ROSTER_COLS.map((c) => <th key={c.key} style={{ width: c.width, textAlign: c.align }}>{c.label}</th>)}
+            <th>Notes</th>
             <th style={{ width: 36 }}></th>
           </tr></thead>
           <tbody>
@@ -624,6 +627,7 @@ function RankGroup({ rank, rankLabel, list, selectMode, selected, onToggleOne, o
                   <td style={{ color: "var(--steel)", textAlign: "center" }}>{m.joinDate ? fmtDate(m.joinDate) : "Unknown"}</td>
                   <td style={{ color: "var(--steel)", fontFamily: "var(--font-mono)", textAlign: "center" }}><TenureLabel joinDate={m.joinDate} /></td>
                   <td style={{ color: "var(--steel)", textAlign: "center" }}>{last ? fmtDate(last) : "No data"}</td>
+                  <td style={{ color: "var(--steel-dim)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={m.notes || ""}>{m.notes || "—"}</td>
                   <td style={{ textAlign: "right", cursor: "pointer" }} onClick={() => onEdit(m)}><Pencil size={13} color="var(--steel-dim)" /></td>
                 </tr>
               );
@@ -729,7 +733,7 @@ function LeaversTab({ members, retentionDays, rankLabels, onReactivate, onPurgeN
                     <tr key={m.id}>
                       <td style={{ fontWeight: 600, cursor: "pointer" }} onClick={() => onEdit(m)}>{m.name}</td>
                       <td style={{ color: "var(--steel-dim)" }}>{m.gameId || "—"}</td>
-                      <td><RankBadge rank={m.rank} label={rankLabels?.[m.rank]} /></td>
+                      <td><RankBadge rank={m.rank} /></td>
                       <td><RoleBadge label={m.customRole} /></td>
                       <td style={{ fontFamily: "var(--font-mono)" }}><TenureLabel joinDate={m.joinDate} endDate={m.leftDate} /></td>
                       <td style={{ color: "var(--steel)" }}>{fmtDate(m.leftDate)}</td>
@@ -826,9 +830,13 @@ function DeltaTag({ delta }) {
   const up = delta > 0;
   return <span style={{ color: up ? "var(--success)" : "var(--danger)", display: "inline-flex", alignItems: "center", gap: 3, fontFamily: "var(--font-mono)" }}>{up ? <ArrowUp size={11} /> : <ArrowDown size={11} />}{fmtNum(Math.abs(delta))}</span>;
 }
+const SKILL_SUFFIX = ["", "I", "II", "III"];
 const tierLabel = (cls) => {
   if (!cls || !cls.troopTier) return "—";
-  if (cls.troopTier === "T12") return `T12 (${SKILL_LABELS[cls.t12Skills || 0]})`;
+  if (cls.troopTier === "T12") {
+    const n = cls.t12Skills || 0;
+    return n > 0 ? `T12 - ${SKILL_SUFFIX[n]}` : "T12";
+  }
   return cls.troopTier;
 };
 const fcLabel = (cls) => cls?.fcTroopLevel || "—";
@@ -931,17 +939,42 @@ function ModeBadge({ mode }) {
     </span>
   );
 }
-function EventDetail({ event, members, participation, onClose, onDelete, onToggleSignUp, onToggleAttend, onTogglePartial, onScore, onNote, onSetStrategy }) {
+function AddParticipantPicker({ members, excludeIds, onAdd }) {
   const [query, setQuery] = useState("");
+  const candidates = query
+    ? members.filter((m) => m.status !== "left" && !excludeIds.has(m.id) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 20)
+    : [];
+  return (
+    <div style={{ position: "relative", marginBottom: 12 }}>
+      <div className="wsc-search">
+        <Search size={13} color="var(--steel-dim)" />
+        <input placeholder="Search a member to add to this event…" value={query} onChange={(e) => setQuery(e.target.value)} />
+      </div>
+      {query && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 8, marginTop: 4, maxHeight: 180, overflowY: "auto", zIndex: 10 }}>
+          {candidates.length === 0 ? (
+            <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>No matches</div>
+          ) : candidates.map((m) => (
+            <div key={m.id} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--border-soft)" }}
+              onClick={() => { onAdd(m.id); setQuery(""); }}>
+              {m.name}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+function EventDetail({ event, members, participation, onClose, onDelete, onToggleSignUp, onToggleAttend, onTogglePartial, onScore, onNote, onSetStrategy }) {
   const isStrategy = event.mode === "strategy";
   const partMap = {};
   participation.filter((p) => p.eventId === event.id).forEach((p) => { partMap[p.memberId] = p; });
-  const attendedCount = Object.values(partMap).filter((p) => p.attended).length;
-  const signedCount = Object.values(partMap).filter((p) => p.signedUp).length;
-  let filtered = members.filter((m) => m.status !== "left" && m.name.toLowerCase().includes(query.toLowerCase()));
+  const participantIds = new Set(Object.entries(partMap).filter(([, p]) => p.signedUp).map(([id]) => id));
+  let addedMembers = members.filter((m) => participantIds.has(m.id));
   if (isStrategy) {
-    filtered = filtered.slice().sort((a, b) => strategyPoints(partMap[b.id]) - strategyPoints(partMap[a.id]));
+    addedMembers = addedMembers.slice().sort((a, b) => strategyPoints(partMap[b.id]) - strategyPoints(partMap[a.id]));
   }
+  const attendedCount = addedMembers.filter((m) => partMap[m.id]?.attended).length;
   let rankCounter = 0;
   const handleDelete = () => {
     if (window.confirm(`Delete "${event.name}${event.session ? ` · ${event.session}` : ""}" and all its participation data? This can't be undone.`)) onDelete(event.id);
@@ -950,25 +983,28 @@ function EventDetail({ event, members, participation, onClose, onDelete, onToggl
     <Modal title={`${event.name}${event.session ? ` · ${event.session}` : ""} — ${fmtDate(event.date)}`} onClose={onClose} wide>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <div style={{ fontSize: 13, color: "var(--steel-dim)" }}>
-          {isStrategy ? `${attendedCount} participated` : `${signedCount} signed up · ${attendedCount} attended`}
+          {addedMembers.length} added · {attendedCount} attended
           <ModeBadge mode={event.mode} />
         </div>
         <button className="wsc-btn wsc-btn-sm wsc-btn-danger" onClick={handleDelete}><Trash2 size={12} /> Delete event</button>
       </div>
-      <div className="wsc-search" style={{ marginBottom: 10 }}><Search size={13} color="var(--steel-dim)" /><input placeholder="Search member" value={query} onChange={(e) => setQuery(e.target.value)} /></div>
+      <AddParticipantPicker members={members} excludeIds={participantIds} onAdd={(id) => onToggleSignUp(event.id, id, true)} />
       <div className="wsc-scroll" style={{ maxHeight: 380, overflowY: "auto", overflowX: "auto" }}>
         <table className="wsc-table" style={{ minWidth: 560 }}>
           <thead><tr>
             {isStrategy && <th>Rank</th>}
             <th>Member</th>
-            {isStrategy ? <><th>Signed up</th><th>Attended</th><th>Full duration?</th><th>Strategy</th></> : <th>Participated</th>}
+            {isStrategy ? <><th>Attended</th><th>Full duration?</th><th>Strategy</th></> : <th>Participated</th>}
             {!isStrategy && <th>Score</th>}
             <th>Notes</th>
+            <th></th>
           </tr></thead>
           <tbody>
-            {filtered.map((m) => {
+            {addedMembers.length === 0 ? (
+              <tr><td colSpan={8} style={{ padding: 20 }}><EmptyState title="No one added yet" body="Search above to add members who are taking part in this event." /></td></tr>
+            ) : addedMembers.map((m) => {
               const p = partMap[m.id];
-              const noShow = p?.signedUp && !p?.attended;
+              const noShow = !p?.attended;
               const showRank = isStrategy && p?.attended;
               if (showRank) rankCounter += 1;
               return (
@@ -977,8 +1013,6 @@ function EventDetail({ event, members, participation, onClose, onDelete, onToggl
                   <td>{m.name}{isStrategy && noShow && <span className="wsc-pill" style={{ background: "#E2604F22", color: "var(--danger)", marginLeft: 8 }}>No-show</span>}</td>
                   {isStrategy ? (
                     <>
-                      <td><button className="wsc-btn wsc-btn-icon" style={{ background: p?.signedUp ? "#6FCBEA22" : "transparent", borderColor: p?.signedUp ? "var(--frost)" : "var(--border)" }}
-                        onClick={() => onToggleSignUp(event.id, m.id, !p?.signedUp)} aria-label="Toggle signed up"><Check size={13} color={p?.signedUp ? "var(--frost)" : "var(--steel-dim)"} /></button></td>
                       <td><button className="wsc-btn wsc-btn-icon" style={{ background: p?.attended ? "#5FBF8C22" : "transparent", borderColor: p?.attended ? "var(--success)" : "var(--border)" }}
                         onClick={() => onToggleAttend(event.id, m.id, !p?.attended)} aria-label="Toggle attended"><Check size={13} color={p?.attended ? "var(--success)" : "var(--steel-dim)"} /></button></td>
                       <td>
@@ -1004,6 +1038,7 @@ function EventDetail({ event, members, participation, onClose, onDelete, onToggl
                   )}
                   {!isStrategy && <td><input className="wsc-input" style={{ width: 90 }} type="number" placeholder="—" defaultValue={p?.score ?? ""} onBlur={(e) => onScore(event.id, m.id, e.target.value)} /></td>}
                   <td><input className="wsc-input" style={{ width: 150 }} placeholder="e.g. left after 20 min" defaultValue={p?.note ?? ""} onBlur={(e) => onNote(event.id, m.id, e.target.value)} /></td>
+                  <td><button className="wsc-btn wsc-btn-icon" onClick={() => onToggleSignUp(event.id, m.id, false)} aria-label="Remove from event" title="Remove from event"><X size={12} color="var(--steel-dim)" /></button></td>
                 </tr>
               );
             })}
@@ -1241,10 +1276,15 @@ export default function App() {
       };
     });
     const wsGrowth = XLSX.utils.json_to_sheet(growthRows);
-    const wsEvents = XLSX.utils.json_to_sheet(events.map((e) => ({ Date: e.date, Type: e.type, Name: e.name, Session: e.session || "" })));
+    const wsEvents = XLSX.utils.json_to_sheet(events.map((e) => ({ Date: e.date, Type: e.type, Name: e.name, Session: e.session || "", Mode: e.mode === "strategy" ? "Strategy compliance" : "Score" })));
     const partRows = participation.map((p) => {
       const ev = events.find((e) => e.id === p.eventId), m = members.find((x) => x.id === p.memberId);
-      return { Event: ev ? ev.name : p.eventId, Date: ev ? ev.date : "", Member: m ? m.name : p.memberId, "Signed up": p.signedUp ? "Yes" : "No", Attended: p.attended ? "Yes" : "No", Score: p.score };
+      return {
+        Event: ev ? ev.name : p.eventId, Date: ev ? ev.date : "", Member: m ? m.name : p.memberId,
+        "Signed up": p.signedUp ? "Yes" : "No", Attended: p.attended ? "Yes" : "No",
+        "Full duration": p.attended ? (p.partial ? "No — left early" : "Yes") : "",
+        Score: p.score, Strategy: p.strategy ? (STRATEGY_LABELS[p.strategy] || p.strategy) : "", Notes: p.note || "",
+      };
     });
     const wsPart = XLSX.utils.json_to_sheet(partRows);
     const wb = XLSX.utils.book_new();
