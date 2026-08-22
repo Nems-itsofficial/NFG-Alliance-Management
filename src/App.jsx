@@ -1688,7 +1688,7 @@ export default function App() {
       }
 
       zip.file("xl/worksheets/sheet1.xml", sheetXml);
-      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -1756,7 +1756,7 @@ export default function App() {
       }
       zip.file(sheetPath, xml);
 
-      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
