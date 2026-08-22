@@ -1199,14 +1199,15 @@ function SeatPicker({ value, roster, usedIds, powerByMember, onSelect }) {
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState(false);
   const current = roster.find((m) => m.id === value) || null;
+  const isFreeText = !!value && !current; // a value that isn't any real member's id
 
-  if (current && !editing) {
+  if (value && !editing) {
     return (
       <div style={{ display: "flex", gap: 6, flex: 1 }}>
         <div className="wsc-input" style={{ flex: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}
-          onClick={() => { setEditing(true); setQuery(""); }}>
-          <span>{current.name}</span>
-          {powerByMember[current.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{fmtNum(powerByMember[current.id])}</span> : null}
+          onClick={() => { setEditing(true); setQuery(isFreeText ? value : ""); }}>
+          <span>{current ? current.name : value}</span>
+          {current && powerByMember[current.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{fmtNum(powerByMember[current.id])}</span> : null}
         </div>
         <button className="wsc-btn wsc-btn-icon" onClick={() => onSelect("")} aria-label="Clear seat"><X size={12} color="var(--steel-dim)" /></button>
       </div>
@@ -1216,15 +1217,17 @@ function SeatPicker({ value, roster, usedIds, powerByMember, onSelect }) {
   const candidates = query
     ? roster.filter((m) => (!usedIds.has(m.id) || m.id === value) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 15)
     : [];
+  const commitFreeText = () => { if (query.trim()) { onSelect(query.trim()); setQuery(""); setEditing(false); } };
   return (
     <div style={{ position: "relative", flex: 1 }}>
-      <input className="wsc-input" placeholder="Search a member…" value={query} autoFocus={editing}
+      <input className="wsc-input" placeholder="Search a member, or type any name…" value={query} autoFocus={editing}
         onChange={(e) => setQuery(e.target.value)}
-        onBlur={() => setTimeout(() => setEditing(false), 150)} />
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitFreeText(); } }}
+        onBlur={() => setTimeout(commitFreeText, 150)} />
       {query && (
         <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 8, marginTop: 4, maxHeight: 180, overflowY: "auto", zIndex: 20 }}>
           {candidates.length === 0 ? (
-            <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>No matches</div>
+            <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>No roster matches — press Enter to use "{query}" as typed</div>
           ) : candidates.map((m) => (
             <div key={m.id} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, display: "flex", justifyContent: "space-between" }}
               onMouseDown={() => { onSelect(m.id); setQuery(""); setEditing(false); }}>
@@ -1665,13 +1668,13 @@ export default function App() {
       for (const team of CANYON_TEAMS) {
         const arr = seats[team.key] || [];
         for (let i = 0; i < team.seats; i++) {
-          const memberId = arr[i];
-          if (!memberId) continue;
-          const member = members.find((m) => m.id === memberId);
-          if (!member) continue;
+          const seatValue = arr[i];
+          if (!seatValue) continue;
+          const member = members.find((m) => m.id === seatValue);
+          const displayName = member ? member.name : seatValue; // free-typed text falls back as-is
           const row = team.startRow + i;
           const cellRef = `C${row}`;
-          const nameXml = `<is><t xml:space="preserve">${escapeXml(member.name)}</t></is>`;
+          const nameXml = `<is><t xml:space="preserve">${escapeXml(displayName)}</t></is>`;
           const replaceWith = (attrs) => {
             const styleMatch = attrs.match(/s="(\d+)"/);
             const s = styleMatch ? ` s="${styleMatch[1]}"` : "";
@@ -1733,13 +1736,13 @@ export default function App() {
       for (const b of FOUNDRY_BUILDINGS) {
         const arr = seats[b.key] || [];
         for (let i = 0; i < b.seats; i++) {
-          const memberId = arr[i];
-          if (!memberId) continue;
-          const member = members.find((m) => m.id === memberId);
-          if (!member) continue;
+          const seatValue = arr[i];
+          if (!seatValue) continue;
+          const member = members.find((m) => m.id === seatValue);
+          const displayName = member ? member.name : seatValue; // free-typed text falls back as-is
           const row = b.startRow + i;
           const cellRef = `${b.col}${row}`;
-          const nameXml = `<is><t xml:space="preserve">${escapeXml(member.name)}</t></is>`;
+          const nameXml = `<is><t xml:space="preserve">${escapeXml(displayName)}</t></is>`;
           const replaceWith = (attrs) => {
             const sm = attrs.match(/s="(\d+)"/);
             const s = sm ? ` s="${sm[1]}"` : "";
@@ -1816,9 +1819,10 @@ export default function App() {
   const setNote = useCallback((eventId, memberId, note) => upsertParticipation(eventId, memberId, { note }), [upsertParticipation]);
   const setStrategy = useCallback((eventId, memberId, strategy) => upsertParticipation(eventId, memberId, { strategy }), [upsertParticipation]);
   const importFromPlan = useCallback(async (event, plan) => {
-    const memberIds = [...new Set(Object.values(plan.seats || {}).flat().filter(Boolean))];
+    const rosterIds = new Set(members.map((m) => m.id));
+    const memberIds = [...new Set(Object.values(plan.seats || {}).flat().filter(Boolean))].filter((id) => rosterIds.has(id));
     for (const memberId of memberIds) await toggleSignUp(event.id, memberId, true);
-  }, [toggleSignUp]);
+  }, [toggleSignUp, members]);
 
   const roster = members.filter((m) => m.status !== "left");
   const leaverCount = members.filter((m) => m.status === "left").length;
