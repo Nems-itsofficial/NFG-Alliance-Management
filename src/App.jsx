@@ -59,14 +59,6 @@ const TenureLabel = ({ joinDate, endDate }) => {
   return val === "Unknown" ? <span style={{ color: "var(--steel-dim)", fontStyle: "italic" }}>Unknown</span> : <span>{val}</span>;
 };
 const SKILL_LABELS = ["No skill", "1st skill", "2nd skill", "3rd skill"];
-const classSummary = (cls) => {
-  if (!cls) return "—";
-  const tierPart = cls.troopTier === "T12" ? `T12 (${SKILL_LABELS[cls.t12Skills || 0]})` : (cls.troopTier || "");
-  const fcPart = cls.fcTroopLevel || "";
-  if (!tierPart && !fcPart) return "—";
-  if (tierPart && fcPart) return `${tierPart} · ${fcPart}`;
-  return tierPart || fcPart;
-};
 
 // ---------------------------------------------------------------- data layer (Supabase)
 const rowToMember = (r) => ({ id: r.id, name: r.name, gameId: r.game_id || "", rank: r.rank, status: r.status, customRole: r.custom_role || "", joinDate: r.join_date || "", leftDate: r.left_date || "", notes: r.notes || "" });
@@ -612,10 +604,10 @@ function RankGroup({ rank, rankLabel, list, selectMode, selected, onToggleOne, o
         <span style={{ fontSize: 13, color: "var(--steel-dim)" }}>{list.length} member{list.length !== 1 ? "s" : ""}</span>
       </div>
       <div style={{ overflowX: "auto" }}>
-        <table className="wsc-table" style={{ tableLayout: "fixed", width: "100%" }}>
+        <table className="wsc-table" style={{ tableLayout: "fixed", width: "auto" }}>
           <thead><tr>
             {selectMode && <th style={{ width: 30 }}><input type="checkbox" className="wsc-checkbox" checked={allSelected} onChange={() => onToggleAllInGroup(list)} /></th>}
-            <th>Name</th>
+            <th style={{ width: 200 }}>Name</th>
             {ROSTER_COLS.map((c) => <th key={c.key} style={{ width: c.width, textAlign: c.align }}>{c.label}</th>)}
             <th style={{ width: 36 }}></th>
           </tr></thead>
@@ -834,13 +826,19 @@ function DeltaTag({ delta }) {
   const up = delta > 0;
   return <span style={{ color: up ? "var(--success)" : "var(--danger)", display: "inline-flex", alignItems: "center", gap: 3, fontFamily: "var(--font-mono)" }}>{up ? <ArrowUp size={11} /> : <ArrowDown size={11} />}{fmtNum(Math.abs(delta))}</span>;
 }
-function TroopsCell({ classes }) {
+const tierLabel = (cls) => {
+  if (!cls || !cls.troopTier) return "—";
+  if (cls.troopTier === "T12") return `T12 (${SKILL_LABELS[cls.t12Skills || 0]})`;
+  return cls.troopTier;
+};
+const fcLabel = (cls) => cls?.fcTroopLevel || "—";
+function MergedClassCell({ classes, getLabel }) {
   const order = [["infantry", "Infantry"], ["lancer", "Lancer"], ["marksman", "Marksman"]];
   return (
     <span style={{ fontFamily: "var(--font-mono)" }}>
       {order.map(([key], i) => (
         <span key={key}>
-          <span style={{ color: CLASS_COLORS[key] }}>{classSummary(classes?.[key])}</span>
+          <span style={{ color: CLASS_COLORS[key] }}>{getLabel(classes?.[key])}</span>
           {i < order.length - 1 && <span style={{ color: "var(--steel-dim)" }}> / </span>}
         </span>
       ))}
@@ -856,7 +854,7 @@ function GrowthTab({ members, growth, onEditMember }) {
           <div style={{ padding: "10px 18px 0", fontSize: 12.5, color: "var(--steel-dim)" }}>Click a row to update that member's profile. Troops shown as Infantry / Lancer / Marksman.</div>
           <div style={{ overflowX: "auto" }}>
             <table className="wsc-table">
-              <thead><tr><th>Member</th><th>Power</th><th>Change</th><th>Furnace</th><th>Troops</th><th>Updated</th></tr></thead>
+              <thead><tr><th>Member</th><th>Power</th><th>Change</th><th>Furnace</th><th>Troop tier</th><th>FC level</th><th>Updated</th></tr></thead>
               <tbody>
                 {members.map((m) => {
                   const g = byMember[m.id];
@@ -867,7 +865,8 @@ function GrowthTab({ members, growth, onEditMember }) {
                       <td style={{ fontFamily: "var(--font-mono)" }}>{g && g.power !== "" ? fmtNum(g.power) : "—"}</td>
                       <td><DeltaTag delta={delta} /></td>
                       <td style={{ fontFamily: "var(--font-mono)" }}>{g?.furnaceLevel || "—"}</td>
-                      <td><TroopsCell classes={g?.classes} /></td>
+                      <td><MergedClassCell classes={g?.classes} getLabel={tierLabel} /></td>
+                      <td><MergedClassCell classes={g?.classes} getLabel={fcLabel} /></td>
                       <td style={{ color: "var(--steel-dim)" }}>{g ? fmtDate(g.updatedDate) : "Never"}</td>
                     </tr>
                   );
