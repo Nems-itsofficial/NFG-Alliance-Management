@@ -1092,9 +1092,11 @@ function ModeBadge({ mode }) {
 function AddParticipantPicker({ members, excludeIds, onAdd }) {
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState(0);
+  const itemRefs = useRef([]);
   const candidates = query
     ? members.filter((m) => m.status !== "left" && !excludeIds.has(m.id) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 20)
     : [];
+  useEffect(() => { itemRefs.current[highlighted]?.scrollIntoView({ block: "nearest" }); }, [highlighted]);
   const select = (m) => { onAdd(m.id); setQuery(""); setHighlighted(0); };
   const handleKeyDown = (e) => {
     if (!candidates.length) return;
@@ -1116,7 +1118,7 @@ function AddParticipantPicker({ members, excludeIds, onAdd }) {
           {candidates.length === 0 ? (
             <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>No matches</div>
           ) : candidates.map((m, i) => (
-            <div key={m.id} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--border-soft)", background: i === highlighted ? "var(--bg-elev)" : "transparent" }}
+            <div key={m.id} ref={(el) => (itemRefs.current[i] = el)} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--border-soft)", background: i === highlighted ? "var(--bg-elev)" : "transparent" }}
               onMouseEnter={() => setHighlighted(i)}
               onClick={() => select(m)}>
               {m.name}
@@ -1305,8 +1307,15 @@ function AssignmentModal({ onClose, onSave }) {
 function SeatPicker({ value, roster, usedIds, powerByMember, onSelect }) {
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState(false);
+  const [highlighted, setHighlighted] = useState(0);
+  const itemRefs = useRef([]);
   const current = roster.find((m) => m.id === value) || null;
   const isFreeText = !!value && !current; // a value that isn't any real member's id
+
+  const candidates = query
+    ? roster.filter((m) => (!usedIds.has(m.id) || m.id === value) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 15)
+    : [];
+  useEffect(() => { itemRefs.current[highlighted]?.scrollIntoView({ block: "nearest" }); }, [highlighted]);
 
   if (value && !editing) {
     return (
@@ -1321,10 +1330,6 @@ function SeatPicker({ value, roster, usedIds, powerByMember, onSelect }) {
     );
   }
 
-  const candidates = query
-    ? roster.filter((m) => (!usedIds.has(m.id) || m.id === value) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 15)
-    : [];
-  const [highlighted, setHighlighted] = useState(0);
   const commitFreeText = () => { if (query.trim()) { onSelect(query.trim()); setQuery(""); setEditing(false); } };
   const selectCandidate = (m) => { onSelect(m.id); setQuery(""); setEditing(false); setHighlighted(0); };
   const handleKeyDown = (e) => {
@@ -1347,7 +1352,7 @@ function SeatPicker({ value, roster, usedIds, powerByMember, onSelect }) {
           {candidates.length === 0 ? (
             <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>No roster matches — press Enter to use "{query}" as typed</div>
           ) : candidates.map((m, i) => (
-            <div key={m.id} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, display: "flex", justifyContent: "space-between", background: i === highlighted ? "var(--bg-elev)" : "transparent" }}
+            <div key={m.id} ref={(el) => (itemRefs.current[i] = el)} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, display: "flex", justifyContent: "space-between", background: i === highlighted ? "var(--bg-elev)" : "transparent" }}
               onMouseEnter={() => setHighlighted(i)}
               onMouseDown={() => selectCandidate(m)}>
               <span>{m.name}</span>
@@ -1438,10 +1443,12 @@ function FoundryEditor({ assignment, members, growth, onChangeSeats, onExport, o
 function CustomTeamCard({ team, roster, powerByMember, onChange, onRemove }) {
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState(0);
+  const itemRefs = useRef([]);
   const memberIds = team.memberIds || [];
   const addMember = (id) => { if (!memberIds.includes(id)) onChange({ ...team, memberIds: [...memberIds, id] }); setQuery(""); setHighlighted(0); };
   const removeMember = (id) => onChange({ ...team, memberIds: memberIds.filter((m) => m !== id) });
   const candidates = query ? roster.filter((m) => !memberIds.includes(m.id) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 15) : [];
+  useEffect(() => { itemRefs.current[highlighted]?.scrollIntoView({ block: "nearest" }); }, [highlighted]);
   const handleKeyDown = (e) => {
     if (!candidates.length) return;
     if (e.key === "ArrowDown") { e.preventDefault(); setHighlighted((h) => Math.min(h + 1, candidates.length - 1)); }
@@ -1474,7 +1481,7 @@ function CustomTeamCard({ team, roster, powerByMember, onChange, onRemove }) {
           {query && (
             <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 8, marginTop: 4, maxHeight: 180, overflowY: "auto", zIndex: 20 }}>
               {candidates.length === 0 ? <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>No matches</div> :
-                candidates.map((m, i) => <div key={m.id} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, background: i === highlighted ? "var(--bg-elev)" : "transparent" }} onMouseEnter={() => setHighlighted(i)} onMouseDown={() => addMember(m.id)}>{m.name}</div>)}
+                candidates.map((m, i) => <div key={m.id} ref={(el) => (itemRefs.current[i] = el)} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, background: i === highlighted ? "var(--bg-elev)" : "transparent" }} onMouseEnter={() => setHighlighted(i)} onMouseDown={() => addMember(m.id)}>{m.name}</div>)}
             </div>
           )}
         </div>
