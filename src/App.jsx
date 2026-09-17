@@ -198,7 +198,9 @@ const STYLE = `
   justify-content:center; z-index:50; padding:20px; }
 .wsc-modal { background:var(--panel); border:1px solid var(--border); border-radius:13px; padding:22px;
   width:100%; max-width:460px; max-height:85vh; overflow-y:auto; }
-.wsc-modal.wide { max-width:640px; }
+.wsc-modal.wide { width:820px; max-width:95vw; min-width:480px; height:620px; min-height:340px; max-height:90vh;
+  resize:both; overflow:auto; display:flex; flex-direction:column; }
+.wsc-modal-flex-scroll { flex:1 1 auto; overflow:auto; min-height:0; }
 .wsc-modal h3 { font-family:var(--font-display); font-size:16px; margin:0 0 16px; letter-spacing:0.02em; }
 .wsc-empty { text-align:center; padding:40px 20px; color:var(--steel-dim); }
 .wsc-empty-title { color:var(--steel); font-weight:600; margin-bottom:4px; font-size:15px; }
@@ -229,7 +231,7 @@ const STYLE = `
   .wsc-grid-hero { grid-template-columns: 1fr; }
   .wsc-grid-pair { grid-template-columns: 1fr; margin-top:0; }
   .wsc-modal { max-width:94vw !important; padding:16px; }
-  .wsc-modal.wide { max-width:94vw !important; }
+  .wsc-modal.wide { max-width:94vw !important; width:94vw; height:80vh; min-width:0; resize:none; }
   .wsc-bottomnav { display:flex; position:fixed; bottom:0; left:0; right:0; background:var(--bg-elev);
     border-top:1px solid var(--border-soft); padding:6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
     z-index:40; justify-content:space-around; }
@@ -593,6 +595,21 @@ function Dashboard({ members, growth, events, participation, config }) {
     return Object.entries(counts).map(([memberId, count]) => ({ member: activeMembers.find((m) => m.id === memberId), count }))
       .filter((r) => r.member && r.count >= 2).sort((a, b) => b.count - a.count).slice(0, 8);
   }, [participation, activeMembers]);
+  const earlyLeavers = useMemo(() => {
+    const eventDateById = {}; events.forEach((e) => { eventDateById[e.id] = e.date; });
+    const counts = {}, lastNoteByMember = {};
+    participation.forEach((p) => {
+      if (p.attended && p.partial) {
+        counts[p.memberId] = (counts[p.memberId] || 0) + 1;
+        const evDate = eventDateById[p.eventId] || "";
+        const existing = lastNoteByMember[p.memberId];
+        if (!existing || evDate >= existing.date) lastNoteByMember[p.memberId] = { date: evDate, note: p.note || "" };
+      }
+    });
+    return Object.entries(counts).map(([memberId, count]) => ({
+      member: activeMembers.find((m) => m.id === memberId), count, lastNote: lastNoteByMember[memberId]?.note || "",
+    })).filter((r) => r.member && r.count >= 2).sort((a, b) => b.count - a.count).slice(0, 8);
+  }, [participation, activeMembers, events]);
   const activeCount = activeMembers.length;
   const latestEvent = events.length ? [...events].sort((a, b) => b.date.localeCompare(a.date))[0] : null;
   const latestEventAttendance = latestEvent && activeCount > 0 ? participation.filter((p) => p.eventId === latestEvent.id && p.attended).length / activeCount : null;
@@ -648,6 +665,19 @@ function Dashboard({ members, growth, events, participation, config }) {
           )}
         </div>
         <T12SkillCard members={activeMembers} growth={growth} />
+      </div>
+      <div className="wsc-card" style={{ marginTop: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><LogOut size={15} color="var(--amber)" /><div className="wsc-stat-label" style={{ margin: 0 }}>Frequent early leavers</div></div>
+        {earlyLeavers.length === 0 ? <EmptyState title="No repeat early leavers" body="Members who leave events early twice or more will show here, along with their most recent note." /> : (
+          <table className="wsc-table"><thead><tr><th>Member</th><th>Times</th><th>Last note</th></tr></thead>
+            <tbody>{earlyLeavers.map(({ member, count, lastNote }) => (
+              <tr key={member.id}>
+                <td>{member.name}</td>
+                <td style={{ color: "var(--amber)", fontFamily: "var(--font-mono)" }}>{count}</td>
+                <td style={{ color: "var(--steel-dim)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={lastNote}>{lastNote || "—"}</td>
+              </tr>
+            ))}</tbody></table>
+        )}
       </div>
       <div className="wsc-card" style={{ marginTop: 14 }}>
         <div className="wsc-stat-label" style={{ marginBottom: 10 }}>Recent event turnout</div>
@@ -1061,22 +1091,34 @@ function ModeBadge({ mode }) {
 }
 function AddParticipantPicker({ members, excludeIds, onAdd }) {
   const [query, setQuery] = useState("");
+  const [highlighted, setHighlighted] = useState(0);
   const candidates = query
     ? members.filter((m) => m.status !== "left" && !excludeIds.has(m.id) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 20)
     : [];
+  const select = (m) => { onAdd(m.id); setQuery(""); setHighlighted(0); };
+  const handleKeyDown = (e) => {
+    if (!candidates.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setHighlighted((h) => Math.min(h + 1, candidates.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlighted((h) => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); select(candidates[highlighted] || candidates[0]); }
+    else if (e.key === "Escape") setQuery("");
+  };
   return (
     <div style={{ position: "relative", marginBottom: 12 }}>
       <div className="wsc-search">
         <Search size={13} color="var(--steel-dim)" />
-        <input placeholder="Search a member to add to this event…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input placeholder="Search a member to add to this event…" value={query}
+          onChange={(e) => { setQuery(e.target.value); setHighlighted(0); }}
+          onKeyDown={handleKeyDown} />
       </div>
       {query && (
         <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 8, marginTop: 4, maxHeight: 180, overflowY: "auto", zIndex: 10 }}>
           {candidates.length === 0 ? (
             <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>No matches</div>
-          ) : candidates.map((m) => (
-            <div key={m.id} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--border-soft)" }}
-              onClick={() => { onAdd(m.id); setQuery(""); }}>
+          ) : candidates.map((m, i) => (
+            <div key={m.id} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--border-soft)", background: i === highlighted ? "var(--bg-elev)" : "transparent" }}
+              onMouseEnter={() => setHighlighted(i)}
+              onClick={() => select(m)}>
               {m.name}
             </div>
           ))}
@@ -1114,7 +1156,7 @@ function EventDetail({ event, members, participation, canyonAssignments, foundry
         </div>
       </div>
       <AddParticipantPicker members={members} excludeIds={participantIds} onAdd={(id) => onToggleSignUp(event.id, id, true)} />
-      <div className="wsc-scroll" style={{ maxHeight: 380, overflowY: "auto", overflowX: "auto" }}>
+      <div className="wsc-scroll wsc-modal-flex-scroll" style={{ overflowX: "auto" }}>
         <table className="wsc-table" style={{ minWidth: 560 }}>
           <thead><tr>
             {isStrategy && <th>Rank</th>}
@@ -1282,20 +1324,32 @@ function SeatPicker({ value, roster, usedIds, powerByMember, onSelect }) {
   const candidates = query
     ? roster.filter((m) => (!usedIds.has(m.id) || m.id === value) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 15)
     : [];
+  const [highlighted, setHighlighted] = useState(0);
   const commitFreeText = () => { if (query.trim()) { onSelect(query.trim()); setQuery(""); setEditing(false); } };
+  const selectCandidate = (m) => { onSelect(m.id); setQuery(""); setEditing(false); setHighlighted(0); };
+  const handleKeyDown = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setHighlighted((h) => Math.min(h + 1, Math.max(candidates.length - 1, 0))); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlighted((h) => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      if (candidates.length > 0) selectCandidate(candidates[highlighted] || candidates[0]);
+      else commitFreeText();
+    } else if (e.key === "Escape") setQuery("");
+  };
   return (
     <div style={{ position: "relative", flex: 1 }}>
       <input className="wsc-input" placeholder="Search a member, or type any name…" value={query} autoFocus={editing}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitFreeText(); } }}
+        onChange={(e) => { setQuery(e.target.value); setHighlighted(0); }}
+        onKeyDown={handleKeyDown}
         onBlur={() => setTimeout(commitFreeText, 150)} />
       {query && (
         <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 8, marginTop: 4, maxHeight: 180, overflowY: "auto", zIndex: 20 }}>
           {candidates.length === 0 ? (
             <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>No roster matches — press Enter to use "{query}" as typed</div>
-          ) : candidates.map((m) => (
-            <div key={m.id} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, display: "flex", justifyContent: "space-between" }}
-              onMouseDown={() => { onSelect(m.id); setQuery(""); setEditing(false); }}>
+          ) : candidates.map((m, i) => (
+            <div key={m.id} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, display: "flex", justifyContent: "space-between", background: i === highlighted ? "var(--bg-elev)" : "transparent" }}
+              onMouseEnter={() => setHighlighted(i)}
+              onMouseDown={() => selectCandidate(m)}>
               <span>{m.name}</span>
               {powerByMember[m.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{fmtNum(powerByMember[m.id])}</span> : null}
             </div>
@@ -1383,10 +1437,18 @@ function FoundryEditor({ assignment, members, growth, onChangeSeats, onExport, o
 }
 function CustomTeamCard({ team, roster, powerByMember, onChange, onRemove }) {
   const [query, setQuery] = useState("");
+  const [highlighted, setHighlighted] = useState(0);
   const memberIds = team.memberIds || [];
-  const addMember = (id) => { if (!memberIds.includes(id)) onChange({ ...team, memberIds: [...memberIds, id] }); setQuery(""); };
+  const addMember = (id) => { if (!memberIds.includes(id)) onChange({ ...team, memberIds: [...memberIds, id] }); setQuery(""); setHighlighted(0); };
   const removeMember = (id) => onChange({ ...team, memberIds: memberIds.filter((m) => m !== id) });
   const candidates = query ? roster.filter((m) => !memberIds.includes(m.id) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 15) : [];
+  const handleKeyDown = (e) => {
+    if (!candidates.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setHighlighted((h) => Math.min(h + 1, candidates.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlighted((h) => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); addMember((candidates[highlighted] || candidates[0]).id); }
+    else if (e.key === "Escape") setQuery("");
+  };
   return (
     <div className="wsc-card" style={{ marginBottom: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -1406,11 +1468,13 @@ function CustomTeamCard({ team, roster, powerByMember, onChange, onRemove }) {
           })}
         </div>
         <div style={{ position: "relative" }}>
-          <input className="wsc-input" placeholder="Search a member to add…" value={query} onChange={(e) => setQuery(e.target.value)} />
+          <input className="wsc-input" placeholder="Search a member to add…" value={query}
+            onChange={(e) => { setQuery(e.target.value); setHighlighted(0); }}
+            onKeyDown={handleKeyDown} />
           {query && (
             <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 8, marginTop: 4, maxHeight: 180, overflowY: "auto", zIndex: 20 }}>
               {candidates.length === 0 ? <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>No matches</div> :
-                candidates.map((m) => <div key={m.id} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13 }} onMouseDown={() => addMember(m.id)}>{m.name}</div>)}
+                candidates.map((m, i) => <div key={m.id} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, background: i === highlighted ? "var(--bg-elev)" : "transparent" }} onMouseEnter={() => setHighlighted(i)} onMouseDown={() => addMember(m.id)}>{m.name}</div>)}
             </div>
           )}
         </div>
