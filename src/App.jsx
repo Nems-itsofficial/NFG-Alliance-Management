@@ -266,12 +266,45 @@ const roleColor = (label) => {
   return NEON_COLORS[hash % NEON_COLORS.length];
 };
 function RoleBadge({ label }) {
-  if (!label) return <span style={{ color: "var(--steel-dim)" }}>—</span>;
-  const c = roleColor(label);
+  const roles = splitRoles(label);
+  if (roles.length === 0) return <span style={{ color: "var(--steel-dim)" }}>—</span>;
   return (
-    <span className="wsc-role-badge" style={{ color: c, borderColor: c, boxShadow: `0 0 6px ${c}66, 0 0 1px ${c}` }}>
-      {label}
+    <span style={{ display: "inline-flex", gap: 5, flexWrap: "wrap", justifyContent: "center" }}>
+      {roles.map((r, i) => {
+        const c = roleColor(r);
+        return <span key={i} className="wsc-role-badge" style={{ color: c, borderColor: `${c}66`, background: `${c}14` }}>{r}</span>;
+      })}
     </span>
+  );
+}
+function RoleTagInput({ value, onChange }) {
+  const [text, setText] = useState("");
+  const roles = splitRoles(value);
+  const addRole = () => {
+    const t = text.trim();
+    if (t && !roles.includes(t)) onChange([...roles, t].join(", "));
+    setText("");
+  };
+  const removeRole = (r) => onChange(roles.filter((x) => x !== r).join(", "));
+  return (
+    <div>
+      {roles.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+          {roles.map((r) => {
+            const c = roleColor(r);
+            return (
+              <span key={r} className="wsc-role-badge" style={{ color: c, borderColor: `${c}66`, background: `${c}14`, gap: 5 }}>
+                {r}<X size={11} style={{ cursor: "pointer" }} onClick={() => removeRole(r)} />
+              </span>
+            );
+          })}
+        </div>
+      )}
+      <input className="wsc-input" value={text} onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addRole(); } }}
+        onBlur={addRole}
+        placeholder={roles.length ? "Add another role…" : "e.g. Rally Lead"} />
+    </div>
   );
 }
 function Modal({ title, onClose, children, wide }) {
@@ -432,8 +465,8 @@ function MemberModal({ member, onClose, onSave, onDelete }) {
       <div style={{ display: "flex", gap: 10 }}>
         <div className="wsc-field" style={{ flex: 1 }}><label className="wsc-label">Rank</label>
           <select className="wsc-select" value={form.rank} onChange={(e) => set("rank", e.target.value)}>{RANKS.map((r) => <option key={r} value={r}>{r}</option>)}</select></div>
-        <div className="wsc-field" style={{ flex: 1 }}><label className="wsc-label">Custom role (optional)</label>
-          <input className="wsc-input" value={form.customRole || ""} onChange={(e) => set("customRole", e.target.value)} placeholder="e.g. Rally Lead" /></div>
+        <div className="wsc-field" style={{ flex: 1 }}><label className="wsc-label">Custom role(s) (optional)</label>
+          <RoleTagInput value={form.customRole} onChange={(v) => set("customRole", v)} /></div>
       </div>
       <div style={{ display: "flex", gap: 10 }}>
         <div className="wsc-field" style={{ flex: 1 }}><label className="wsc-label">Join date</label>
@@ -681,6 +714,7 @@ function RankGroup({ rank, rankLabel, list, selectMode, selected, onToggleOne, o
     </div>
   );
 }
+const splitRoles = (customRole) => (customRole || "").split(",").map((r) => r.trim()).filter(Boolean);
 function RosterTab({ members, growth, lastActivityByMember, rankLabels, onEdit, onBulkLeave }) {
   const [query, setQuery] = useState("");
   const [rankFilter, setRankFilter] = useState("all");
@@ -694,11 +728,19 @@ function RosterTab({ members, growth, lastActivityByMember, rankLabels, onEdit, 
     growth.forEach((g) => { map[g.memberId] = g.power; });
     return map;
   }, [growth]);
-  const roleOptions = useMemo(() => [...new Set(roster.map((m) => m.customRole).filter(Boolean))].sort(), [roster]);
+  const roleOptions = useMemo(() => {
+    const scoped = rankFilter === "all" ? roster : roster.filter((m) => m.rank === rankFilter);
+    const set = new Set();
+    scoped.forEach((m) => splitRoles(m.customRole).forEach((r) => set.add(r)));
+    return [...set].sort();
+  }, [roster, rankFilter]);
+  useEffect(() => {
+    if (roleFilter !== "all" && !roleOptions.includes(roleFilter)) setRoleFilter("all");
+  }, [roleOptions, roleFilter]);
   const filtered = roster.filter((m) => {
     const matchesQuery = m.name.toLowerCase().includes(query.toLowerCase()) || (m.gameId || "").includes(query);
     const matchesRank = rankFilter === "all" || m.rank === rankFilter;
-    const matchesRole = roleFilter === "all" || m.customRole === roleFilter;
+    const matchesRole = roleFilter === "all" || splitRoles(m.customRole).includes(roleFilter);
     return matchesQuery && matchesRank && matchesRole;
   });
   const groups = useMemo(() => RANKS_DESC.map((rank) => {
@@ -722,11 +764,11 @@ function RosterTab({ members, growth, lastActivityByMember, rankLabels, onEdit, 
     <div>
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
         <div className="wsc-search" style={{ flex: 1, minWidth: 180 }}><Search size={14} color="var(--steel-dim)" /><input placeholder="Search name or ID" value={query} onChange={(e) => setQuery(e.target.value)} /></div>
-        <select className="wsc-select" style={{ width: 140 }} value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
-          <option value="all">All roles</option>{roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
-        </select>
         <select className="wsc-select" style={{ width: 120 }} value={rankFilter} onChange={(e) => setRankFilter(e.target.value)}>
           <option value="all">All ranks</option>{RANKS.map((r) => <option key={r} value={r}>{r}</option>)}
+        </select>
+        <select className="wsc-select" style={{ width: 160 }} value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
+          <option value="all">All roles</option>{roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
         </select>
         {!selectMode ? (
           <button className="wsc-btn wsc-btn-sm" onClick={() => setSelectMode(true)}><CheckSquare size={13} /> Select</button>
@@ -883,21 +925,44 @@ const tierLabel = (cls) => {
   return cls.troopTier;
 };
 const fcLabel = (cls) => cls?.fcTroopLevel || "—";
-function MergedClassCell({ classes, getLabel }) {
+function MergedClassCell({ classes, mode }) {
   const order = [["infantry", "Infantry"], ["lancer", "Lancer"], ["marksman", "Marksman"]];
   return (
     <span style={{ fontFamily: "var(--font-mono)" }}>
-      {order.map(([key], i) => (
-        <span key={key}>
-          <span style={{ color: CLASS_COLORS[key] }}>{getLabel(classes?.[key])}</span>
-          {i < order.length - 1 && <span style={{ color: "var(--steel-dim)" }}> / </span>}
-        </span>
-      ))}
+      {order.map(([key], i) => {
+        const cls = classes?.[key];
+        let content;
+        if (mode === "tier") {
+          if (!cls || !cls.troopTier) content = "—";
+          else if (cls.troopTier === "T12") {
+            const n = cls.t12Skills || 0;
+            content = <>T12{n > 0 && <sup style={{ fontSize: 9, marginLeft: 1, color: "var(--steel-dim)" }}>{SKILL_SUFFIX[n]}</sup>}</>;
+          } else content = cls.troopTier;
+        } else {
+          content = fcLabel(cls);
+        }
+        return (
+          <span key={key}>
+            <span style={{ color: CLASS_COLORS[key] }}>{content}</span>
+            {i < order.length - 1 && <span style={{ color: "var(--steel-dim)" }}> / </span>}
+          </span>
+        );
+      })}
     </span>
   );
 }
-function GrowthTab({ members, growth, onEditMember }) {
+function GrowthTab({ members, growth, participation, onEditMember }) {
   const byMember = useMemo(() => { const map = {}; growth.forEach((g) => { map[g.memberId] = g; }); return map; }, [growth]);
+  const attendanceByMember = useMemo(() => {
+    const map = {};
+    participation.forEach((p) => {
+      if (!p.signedUp) return;
+      if (!map[p.memberId]) map[p.memberId] = { attended: 0, signedUp: 0 };
+      map[p.memberId].signedUp += 1;
+      if (p.attended) map[p.memberId].attended += 1;
+    });
+    return map;
+  }, [participation]);
   return (
     <div>
       {members.length === 0 ? <div className="wsc-card"><EmptyState title="Add members first" body="Growth tracking needs a roster — head to the Roster tab." /></div> : (
@@ -905,19 +970,19 @@ function GrowthTab({ members, growth, onEditMember }) {
           <div style={{ padding: "10px 18px 0", fontSize: 12.5, color: "var(--steel-dim)" }}>Click a row to update that member's profile. Troops shown as Infantry / Lancer / Marksman.</div>
           <div style={{ overflowX: "auto" }}>
             <table className="wsc-table">
-              <thead><tr><th>Member</th><th>Power</th><th>Change</th><th>Furnace</th><th>Troop tier</th><th>FC level</th><th>Updated</th></tr></thead>
+              <thead><tr><th>Member</th><th>Power</th><th>Attendance</th><th>Furnace</th><th style={{ textAlign: "center" }}>Troop tier</th><th style={{ textAlign: "center" }}>FC level</th><th>Updated</th></tr></thead>
               <tbody>
                 {members.map((m) => {
                   const g = byMember[m.id];
-                  const delta = g && g.power !== "" && g.previousPower !== "" && g.previousPower !== undefined ? Number(g.power) - Number(g.previousPower) : null;
+                  const a = attendanceByMember[m.id];
                   return (
                     <tr key={m.id} style={{ cursor: "pointer" }} onClick={() => onEditMember(m.id)}>
                       <td style={{ fontWeight: 600 }}>{m.name}</td>
                       <td style={{ fontFamily: "var(--font-mono)" }}>{g && g.power !== "" ? fmtNum(g.power) : "—"}</td>
-                      <td><DeltaTag delta={delta} /></td>
+                      <td style={{ fontFamily: "var(--font-mono)", color: "var(--steel)" }}>{a ? `${a.attended}/${a.signedUp}` : "—"}</td>
                       <td style={{ fontFamily: "var(--font-mono)" }}>{g?.furnaceLevel || "—"}</td>
-                      <td><MergedClassCell classes={g?.classes} getLabel={tierLabel} /></td>
-                      <td><MergedClassCell classes={g?.classes} getLabel={fcLabel} /></td>
+                      <td style={{ textAlign: "center" }}><MergedClassCell classes={g?.classes} mode="tier" /></td>
+                      <td style={{ textAlign: "center" }}><MergedClassCell classes={g?.classes} mode="fc" /></td>
                       <td style={{ color: "var(--steel-dim)" }}>{g ? fmtDate(g.updatedDate) : "Never"}</td>
                     </tr>
                   );
@@ -965,7 +1030,7 @@ function EventModal({ onClose, onSave, canyonAssignments, foundryAssignments }) 
           <button type="button" className="wsc-btn" style={{ flex: 1, background: mode === "strategy" ? "var(--frost)" : "var(--panel-2)", color: mode === "strategy" ? "#08202C" : "var(--white)", borderColor: mode === "strategy" ? "var(--frost)" : "var(--border)" }} onClick={() => setMode("strategy")}>Strategy compliance</button>
         </div>
         <div style={{ fontSize: 12, color: "var(--steel-dim)", marginTop: 6 }}>
-          {mode === "score" ? "Log a numeric score per member — good for events like Foundry or Canyon Clash." : "Track whether each member followed the called strategy — good for coordinated events like Tyrant or SvS. Produces a ranked leaderboard."}
+          {mode === "score" ? "Log a numeric score per member — good for events like SvS Battle or Tyrant Battle." : "Track whether each member followed the called strategy — good for coordinated events like Foundry Battle or Canyon Clash. Produces a ranked leaderboard."}
         </div>
       </div>
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -1869,7 +1934,7 @@ export default function App() {
     const leaverCount = members.length - activeMembers.length;
     const growthByMember = {}; growth.forEach((g) => { growthByMember[g.memberId] = g; });
     const roleCounts = {};
-    activeMembers.forEach((m) => { if (m.customRole) roleCounts[m.customRole] = (roleCounts[m.customRole] || 0) + 1; });
+    activeMembers.forEach((m) => { splitRoles(m.customRole).forEach((r) => { roleCounts[r] = (roleCounts[r] || 0) + 1; }); });
     const roleRows = Object.entries(roleCounts).sort((a, b) => b[1] - a[1]);
 
     const attendCounts = {}, noShowCounts = {};
@@ -2035,7 +2100,7 @@ export default function App() {
           {tab === "dashboard" && <Dashboard members={members} growth={growth} events={events} participation={participation} config={config} />}
           {tab === "roster" && <RosterTab members={members} growth={growth} lastActivityByMember={lastActivityByMember} rankLabels={config.rankLabels} onEdit={(m) => setMemberModal(m)} onBulkLeave={bulkMarkLeft} />}
           {tab === "leavers" && <LeaversTab members={members} retentionDays={config.leaverRetentionDays ?? 90} rankLabels={config.rankLabels} onReactivate={reactivateMember} onPurgeNow={deleteMember} onEdit={(m) => setMemberModal(m)} />}
-          {tab === "growth" && <GrowthTab members={roster} growth={growth} onEditMember={openGrowthFor} />}
+          {tab === "growth" && <GrowthTab members={roster} growth={growth} participation={participation} onEditMember={openGrowthFor} />}
           {tab === "events" && <EventsTab events={events} members={members} participation={participation} onOpenEvent={(ev) => setOpenEvent(ev)} />}
           {tab === "assignments" && <AssignmentsTab
             canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} customAssignments={customAssignments}
