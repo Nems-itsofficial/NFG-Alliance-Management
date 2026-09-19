@@ -346,7 +346,7 @@ function BottomNav({ tab, setTab, leaverCount }) {
   const items = [
     { id: "dashboard", label: "Home", icon: LayoutDashboard },
     { id: "roster", label: "Roster", icon: Users },
-    { id: "growth", label: "Growth", icon: TrendingUp },
+    { id: "growth", label: "Player Data", icon: TrendingUp },
     { id: "events", label: "Events", icon: CalendarDays },
     { id: "assignments", label: "Plans", icon: ClipboardList },
     { id: "leavers", label: "Leavers", icon: UserX, count: leaverCount },
@@ -368,7 +368,7 @@ function Sidebar({ tab, setTab, allianceName, leaderName, leaverCount }) {
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "roster", label: "Roster", icon: Users },
     { id: "leavers", label: "Leavers", icon: UserX, count: leaverCount },
-    { id: "growth", label: "Growth", icon: TrendingUp },
+    { id: "growth", label: "Player Data", icon: TrendingUp },
     { id: "events", label: "Events", icon: CalendarDays },
     { id: "assignments", label: "Assignments", icon: ClipboardList },
   ];
@@ -667,8 +667,8 @@ function Dashboard({ members, growth, events, participation, config }) {
         <T12SkillCard members={activeMembers} growth={growth} />
       </div>
       <div className="wsc-card" style={{ marginTop: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><LogOut size={15} color="var(--amber)" /><div className="wsc-stat-label" style={{ margin: 0 }}>Frequent early leavers</div></div>
-        {earlyLeavers.length === 0 ? <EmptyState title="No repeat early leavers" body="Members who leave events early twice or more will show here, along with their most recent note." /> : (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><LogOut size={15} color="var(--amber)" /><div className="wsc-stat-label" style={{ margin: 0 }}>Attendance Reliability</div></div>
+        {earlyLeavers.length === 0 ? <EmptyState title="No reliability concerns" body="Members with repeated attendance issues — leaving early, arriving late, or going offline mid-event — will show here, along with their most recent note." /> : (
           <table className="wsc-table"><thead><tr><th>Member</th><th>Times</th><th>Last note</th></tr></thead>
             <tbody>{earlyLeavers.map(({ member, count, lastNote }) => (
               <tr key={member.id}>
@@ -982,6 +982,9 @@ function MergedClassCell({ classes, mode }) {
   );
 }
 function GrowthTab({ members, growth, participation, onEditMember }) {
+  const [query, setQuery] = useState("");
+  const [sortKey, setSortKey] = useState("name");
+  const [sortDir, setSortDir] = useState("asc");
   const byMember = useMemo(() => { const map = {}; growth.forEach((g) => { map[g.memberId] = g; }); return map; }, [growth]);
   const attendanceByMember = useMemo(() => {
     const map = {};
@@ -993,34 +996,75 @@ function GrowthTab({ members, growth, participation, onEditMember }) {
     });
     return map;
   }, [participation]);
+  const filtered = members.filter((m) => m.name.toLowerCase().includes(query.toLowerCase()));
+  const sortValue = (m) => {
+    const g = byMember[m.id];
+    const a = attendanceByMember[m.id];
+    switch (sortKey) {
+      case "power": return g && g.power !== "" ? Number(g.power) : -1;
+      case "attendance": return a ? a.attended / a.signedUp : -1;
+      case "updated": return g?.updatedDate || "";
+      default: return m.name.toLowerCase();
+    }
+  };
+  const sorted = [...filtered].sort((a, b) => {
+    const va = sortValue(a), vb = sortValue(b);
+    if (va < vb) return sortDir === "asc" ? -1 : 1;
+    if (va > vb) return sortDir === "asc" ? 1 : -1;
+    return 0;
+  });
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir(key === "name" ? "asc" : "desc"); }
+  };
+  const SortHeader = ({ sortKeyName, children }) => (
+    <th style={{ cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort(sortKeyName)}>
+      {children}{sortKey === sortKeyName && <span style={{ marginLeft: 4, fontSize: 10, color: "var(--frost)" }}>{sortDir === "asc" ? "▲" : "▼"}</span>}
+    </th>
+  );
   return (
     <div>
-      {members.length === 0 ? <div className="wsc-card"><EmptyState title="Add members first" body="Growth tracking needs a roster — head to the Roster tab." /></div> : (
-        <div className="wsc-card" style={{ padding: 0, overflow: "hidden" }}>
-          <div style={{ padding: "10px 18px 0", fontSize: 12.5, color: "var(--steel-dim)" }}>Click a row to update that member's profile. Troops shown as Infantry / Lancer / Marksman.</div>
-          <div style={{ overflowX: "auto" }}>
-            <table className="wsc-table">
-              <thead><tr><th>Member</th><th>Power</th><th>Attendance</th><th>Furnace</th><th style={{ textAlign: "center" }}>Troop tier</th><th style={{ textAlign: "center" }}>FC level</th><th>Updated</th></tr></thead>
-              <tbody>
-                {members.map((m) => {
-                  const g = byMember[m.id];
-                  const a = attendanceByMember[m.id];
-                  return (
-                    <tr key={m.id} style={{ cursor: "pointer" }} onClick={() => onEditMember(m.id)}>
-                      <td style={{ fontWeight: 600 }}>{m.name}</td>
-                      <td style={{ fontFamily: "var(--font-mono)" }}>{g && g.power !== "" ? fmtNum(g.power) : "—"}</td>
-                      <td style={{ fontFamily: "var(--font-mono)", color: "var(--steel)" }}>{a ? `${a.attended}/${a.signedUp}` : "—"}</td>
-                      <td style={{ fontFamily: "var(--font-mono)" }}>{g?.furnaceLevel || "—"}</td>
-                      <td style={{ textAlign: "center" }}><MergedClassCell classes={g?.classes} mode="tier" /></td>
-                      <td style={{ textAlign: "center" }}><MergedClassCell classes={g?.classes} mode="fc" /></td>
-                      <td style={{ color: "var(--steel-dim)" }}>{g ? fmtDate(g.updatedDate) : "Never"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+      {members.length === 0 ? <div className="wsc-card"><EmptyState title="Add members first" body="Player data tracking needs a roster — head to the Roster tab." /></div> : (
+        <>
+          <div className="wsc-search" style={{ marginBottom: 14, maxWidth: 320 }}><Search size={14} color="var(--steel-dim)" /><input placeholder="Search a player…" value={query} onChange={(e) => setQuery(e.target.value)} /></div>
+          <div className="wsc-card" style={{ padding: 0, overflow: "hidden" }}>
+            <div style={{ padding: "10px 18px 0", fontSize: 12.5, color: "var(--steel-dim)" }}>Click a row, or the pencil, to update that member's profile. Troops shown as Infantry / Lancer / Marksman. Click a column header to sort.</div>
+            <div style={{ overflowX: "auto" }}>
+              <table className="wsc-table">
+                <thead><tr>
+                  <SortHeader sortKeyName="name">Member</SortHeader>
+                  <SortHeader sortKeyName="power">Power</SortHeader>
+                  <SortHeader sortKeyName="attendance">Attendance</SortHeader>
+                  <th>Furnace</th>
+                  <th style={{ textAlign: "center" }}>Troop tier</th>
+                  <th style={{ textAlign: "center" }}>FC level</th>
+                  <SortHeader sortKeyName="updated">Updated</SortHeader>
+                  <th style={{ width: 36 }}></th>
+                </tr></thead>
+                <tbody>
+                  {sorted.length === 0 ? (
+                    <tr><td colSpan={8} style={{ padding: 20 }}><EmptyState title="No matches" body="Try a different search." /></td></tr>
+                  ) : sorted.map((m) => {
+                    const g = byMember[m.id];
+                    const a = attendanceByMember[m.id];
+                    return (
+                      <tr key={m.id} style={{ cursor: "pointer" }} onClick={() => onEditMember(m.id)}>
+                        <td style={{ fontWeight: 600 }}>{m.name}</td>
+                        <td style={{ fontFamily: "var(--font-mono)" }}>{g && g.power !== "" ? fmtNum(g.power) : "—"}</td>
+                        <td style={{ fontFamily: "var(--font-mono)", color: "var(--steel)" }}>{a ? `${a.attended}/${a.signedUp}` : "—"}</td>
+                        <td style={{ fontFamily: "var(--font-mono)" }}>{g?.furnaceLevel || "—"}</td>
+                        <td style={{ textAlign: "center" }}><MergedClassCell classes={g?.classes} mode="tier" /></td>
+                        <td style={{ textAlign: "center" }}><MergedClassCell classes={g?.classes} mode="fc" /></td>
+                        <td style={{ color: "var(--steel-dim)" }}>{g ? fmtDate(g.updatedDate) : "Never"}</td>
+                        <td style={{ textAlign: "right" }} onClick={(e) => { e.stopPropagation(); onEditMember(m.id); }}><Pencil size={13} color="var(--steel-dim)" /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
@@ -1997,7 +2041,7 @@ export default function App() {
     const wsPart = XLSX.utils.json_to_sheet(partRows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, wsMembers, "Roster");
-    XLSX.utils.book_append_sheet(wb, wsGrowth, "Growth");
+    XLSX.utils.book_append_sheet(wb, wsGrowth, "Player Data");
     XLSX.utils.book_append_sheet(wb, wsEvents, "Events");
     XLSX.utils.book_append_sheet(wb, wsPart, "Participation");
     XLSX.writeFile(wb, `${(config.allianceName || "alliance").replace(/[^a-z0-9]+/gi, "-")}-export.xlsx`);
@@ -2158,7 +2202,7 @@ export default function App() {
             <div className="wsc-brand-mobile"><Snowflake size={12} />{config.allianceName || "Alliance"}</div>
             <div className="wsc-title">
               {tab === "dashboard" && "Dashboard"}{tab === "roster" && "Roster"}{tab === "leavers" && "Leavers"}
-              {tab === "growth" && "Growth"}{tab === "events" && "Events"}{tab === "assignments" && "Assignments"}
+              {tab === "growth" && "Player Data"}{tab === "events" && "Events"}{tab === "assignments" && "Assignments"}
             </div>
             <div className="wsc-title-sub">{roster.length} members tracked{leaverCount > 0 ? ` · ${leaverCount} former` : ""}</div>
           </div>
