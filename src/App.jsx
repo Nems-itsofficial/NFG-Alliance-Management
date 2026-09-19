@@ -1645,7 +1645,10 @@ export default function App() {
   const openGrowthFor = useCallback((memberId) => { setGrowthPreset(memberId); setShowLogGrowth(true); }, []);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    // onAuthStateChange fires immediately with the current, fully-settled session on load
+    // (and again on any future change), so a separate getSession() call isn't needed —
+    // that direct call could resolve with a session slightly before it's fully confirmed,
+    // causing the first data fetch to silently come back empty under RLS.
     const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
     return () => sub.subscription.unsubscribe();
   }, []);
