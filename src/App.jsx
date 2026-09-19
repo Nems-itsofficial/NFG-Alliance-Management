@@ -96,8 +96,8 @@ const rowToGrowth = (r) => ({ memberId: r.member_id, power: r.power ?? "", previ
 const growthToRow = (g) => ({ member_id: g.memberId, power: g.power === "" ? null : g.power, previous_power: g.previousPower === "" ? null : g.previousPower, furnace_level: g.furnaceLevel || "", classes: g.classes || {}, updated_date: g.updatedDate || null });
 const rowToEvent = (r) => ({ id: r.id, date: r.date, type: r.type, name: r.name, session: r.session || "", mode: r.mode || "score", linkedType: r.linked_type || "", linkedId: r.linked_id || "" });
 const eventToRow = (e) => ({ date: e.date, type: e.type, name: e.name, session: e.session || "", mode: e.mode || "score", linked_type: e.linkedType || null, linked_id: e.linkedId || null });
-const rowToPart = (r) => ({ id: r.id, eventId: r.event_id, memberId: r.member_id, signedUp: !!r.signed_up, attended: !!r.attended, partial: !!r.partial, score: r.score ?? "", note: r.note || "", strategy: r.strategy || "" });
-const partToRow = (p) => ({ event_id: p.eventId, member_id: p.memberId, signed_up: !!p.signedUp, attended: !!p.attended, partial: !!p.partial, score: p.score === "" || p.score === undefined ? null : p.score, note: p.note || "", strategy: p.strategy || "" });
+const rowToPart = (r) => ({ id: r.id, eventId: r.event_id, memberId: r.member_id, signedUp: !!r.signed_up, attended: !!r.attended, durationStatus: r.duration_status || "full", score: r.score ?? "", note: r.note || "", strategy: r.strategy || "" });
+const partToRow = (p) => ({ event_id: p.eventId, member_id: p.memberId, signed_up: !!p.signedUp, attended: !!p.attended, duration_status: p.durationStatus || "full", score: p.score === "" || p.score === undefined ? null : p.score, note: p.note || "", strategy: p.strategy || "" });
 const rowToCanyon = (r) => ({ id: r.id, name: r.name, date: r.date || "", seats: r.seats || {} });
 const canyonToRow = (c) => ({ name: c.name, date: c.date || null, seats: c.seats || {} });
 const rowToFoundry = (r) => ({ id: r.id, name: r.name, date: r.date || "", legion: r.legion || "LG1", seats: r.seats || {} });
@@ -595,20 +595,28 @@ function Dashboard({ members, growth, events, participation, config }) {
     return Object.entries(counts).map(([memberId, count]) => ({ member: activeMembers.find((m) => m.id === memberId), count }))
       .filter((r) => r.member && r.count >= 2).sort((a, b) => b.count - a.count).slice(0, 8);
   }, [participation, activeMembers]);
-  const earlyLeavers = useMemo(() => {
+  const unreliableAttendance = useMemo(() => {
     const eventDateById = {}; events.forEach((e) => { eventDateById[e.id] = e.date; });
-    const counts = {}, lastNoteByMember = {};
+    const stats = {}; // memberId -> { signedUp, leftEarly, late, vanished, lastNote, lastDate }
     participation.forEach((p) => {
-      if (p.attended && p.partial) {
-        counts[p.memberId] = (counts[p.memberId] || 0) + 1;
+      if (!p.signedUp) return;
+      if (!stats[p.memberId]) stats[p.memberId] = { signedUp: 0, leftEarly: 0, late: 0, vanished: 0, lastNote: "", lastDate: "" };
+      const s = stats[p.memberId];
+      s.signedUp += 1;
+      if (p.attended && p.durationStatus && p.durationStatus !== "full") {
+        if (p.durationStatus === "left_early") s.leftEarly += 1;
+        else if (p.durationStatus === "late") s.late += 1;
+        else if (p.durationStatus === "vanished") s.vanished += 1;
         const evDate = eventDateById[p.eventId] || "";
-        const existing = lastNoteByMember[p.memberId];
-        if (!existing || evDate >= existing.date) lastNoteByMember[p.memberId] = { date: evDate, note: p.note || "" };
+        if (!s.lastDate || evDate >= s.lastDate) { s.lastDate = evDate; s.lastNote = p.note || ""; }
       }
     });
-    return Object.entries(counts).map(([memberId, count]) => ({
-      member: activeMembers.find((m) => m.id === memberId), count, lastNote: lastNoteByMember[memberId]?.note || "",
-    })).filter((r) => r.member && r.count >= 2).sort((a, b) => b.count - a.count).slice(0, 8);
+    return Object.entries(stats).map(([memberId, s]) => {
+      const liabilityCount = s.leftEarly + s.late + s.vanished;
+      const ratio = s.signedUp > 0 ? liabilityCount / s.signedUp : 0;
+      return { member: activeMembers.find((m) => m.id === memberId), liabilityCount, ratio, ...s };
+    }).filter((r) => r.member && r.liabilityCount >= 2 && r.ratio >= 0.5)
+      .sort((a, b) => b.ratio - a.ratio).slice(0, 8);
   }, [participation, activeMembers, events]);
   const activeCount = activeMembers.length;
   const latestEvent = events.length ? [...events].sort((a, b) => b.date.localeCompare(a.date))[0] : null;
@@ -667,16 +675,23 @@ function Dashboard({ members, growth, events, participation, config }) {
         <T12SkillCard members={activeMembers} growth={growth} />
       </div>
       <div className="wsc-card" style={{ marginTop: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><LogOut size={15} color="var(--amber)" /><div className="wsc-stat-label" style={{ margin: 0 }}>Attendance Reliability</div></div>
-        {earlyLeavers.length === 0 ? <EmptyState title="No reliability concerns" body="Members with repeated attendance issues — leaving early, arriving late, or going offline mid-event — will show here, along with their most recent note." /> : (
-          <table className="wsc-table"><thead><tr><th>Member</th><th>Times</th><th>Last note</th></tr></thead>
-            <tbody>{earlyLeavers.map(({ member, count, lastNote }) => (
-              <tr key={member.id}>
-                <td>{member.name}</td>
-                <td style={{ color: "var(--amber)", fontFamily: "var(--font-mono)" }}>{count}</td>
-                <td style={{ color: "var(--steel-dim)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={lastNote}>{lastNote || "—"}</td>
-              </tr>
-            ))}</tbody></table>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><LogOut size={15} color="var(--amber)" /><div className="wsc-stat-label" style={{ margin: 0 }}>Unreliable Attendance</div></div>
+        {unreliableAttendance.length === 0 ? <EmptyState title="No liability concerns" body="Members whose left-early, late, or vanished-mid-event incidents make up half or more of their signed-up events will show here, along with their most recent note. Occasional incidents roll off on their own as good attendance dilutes the ratio." /> : (
+          <table className="wsc-table"><thead><tr><th>Member</th><th>Breakdown</th><th>Rate</th><th>Last note</th></tr></thead>
+            <tbody>{unreliableAttendance.map(({ member, leftEarly, late, vanished, ratio, signedUp, lastNote }) => {
+              const parts = [];
+              if (leftEarly) parts.push(`Left early ×${leftEarly}`);
+              if (late) parts.push(`Late ×${late}`);
+              if (vanished) parts.push(`Vanished ×${vanished}`);
+              return (
+                <tr key={member.id}>
+                  <td>{member.name}</td>
+                  <td style={{ color: "var(--amber)" }}>{parts.join(" · ")}</td>
+                  <td style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)" }}>{Math.round(ratio * 100)}% of {signedUp}</td>
+                  <td style={{ color: "var(--steel-dim)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={lastNote}>{lastNote || "—"}</td>
+                </tr>
+              );
+            })}</tbody></table>
         )}
       </div>
       <div className="wsc-card" style={{ marginTop: 14 }}>
@@ -1119,7 +1134,7 @@ const STRATEGY_LABELS = { followed: "Followed strategy", partial: "Partially fol
 const strategyPoints = (p) => {
   if (!p?.attended) return -1;
   let pts = 2;
-  if (!p.partial) pts += 1;
+  if (!p.durationStatus || p.durationStatus === "full") pts += 1;
   if (p.strategy === "followed") pts += 2;
   else if (p.strategy === "partial") pts += 1;
   return pts;
@@ -1173,7 +1188,7 @@ function AddParticipantPicker({ members, excludeIds, onAdd }) {
     </div>
   );
 }
-function EventDetail({ event, members, participation, canyonAssignments, foundryAssignments, onClose, onDelete, onToggleSignUp, onToggleAttend, onTogglePartial, onScore, onNote, onSetStrategy, onImportFromPlan }) {
+function EventDetail({ event, members, participation, canyonAssignments, foundryAssignments, onClose, onDelete, onToggleSignUp, onToggleAttend, onSetDuration, onScore, onNote, onSetStrategy, onImportFromPlan }) {
   const isStrategy = event.mode === "strategy";
   const partMap = {};
   participation.filter((p) => p.eventId === event.id).forEach((p) => { partMap[p.memberId] = p; });
@@ -1230,8 +1245,13 @@ function EventDetail({ event, members, participation, canyonAssignments, foundry
                         onClick={() => onToggleAttend(event.id, m.id, !p?.attended)} aria-label="Toggle attended"><Check size={13} color={p?.attended ? "var(--success)" : "var(--steel-dim)"} /></button></td>
                       <td>
                         {p?.attended ? (
-                          <button className="wsc-btn wsc-btn-sm" style={{ background: p?.partial ? "#E8A33D22" : "#5FBF8C22", borderColor: p?.partial ? "var(--amber)" : "var(--success)", color: p?.partial ? "var(--amber)" : "var(--success)" }}
-                            onClick={() => onTogglePartial(event.id, m.id, !p?.partial)}>{p?.partial ? "Left early" : "Full"}</button>
+                          <select className="wsc-select" style={{ width: 130, color: p?.durationStatus && p.durationStatus !== "full" ? "var(--amber)" : "var(--success)" }}
+                            value={p?.durationStatus || "full"} onChange={(e) => onSetDuration(event.id, m.id, e.target.value)}>
+                            <option value="full">Full</option>
+                            <option value="left_early">Left early</option>
+                            <option value="late">Arrived late</option>
+                            <option value="vanished">Vanished mid-event</option>
+                          </select>
                         ) : <span style={{ color: "var(--steel-dim)" }}>—</span>}
                       </td>
                       <td>
@@ -1282,7 +1302,7 @@ function EventsTab({ events, members, participation, onOpenEvent }) {
                 {sorted.map((ev) => {
                   const rows = participation.filter((p) => p.eventId === ev.id);
                   const signed = rows.filter((p) => p.signedUp).length, attended = rows.filter((p) => p.attended).length;
-                  const partial = rows.filter((p) => p.attended && p.partial).length;
+                  const partial = rows.filter((p) => p.attended && p.durationStatus === "left_early").length;
                   const noShows = rows.filter((p) => p.signedUp && !p.attended).length;
                   const rate = activeMembers.length > 0 ? Math.round((attended / activeMembers.length) * 100) : 0;
                   return (
@@ -1990,14 +2010,14 @@ export default function App() {
 
   const upsertParticipation = useCallback(async (eventId, memberId, patch) => {
     const existing = participation.find((p) => p.eventId === eventId && p.memberId === memberId);
-    const merged = existing ? { ...existing, ...patch } : { eventId, memberId, signedUp: false, attended: false, partial: false, score: "", note: "", ...patch };
+    const merged = existing ? { ...existing, ...patch } : { eventId, memberId, signedUp: false, attended: false, durationStatus: "full", score: "", note: "", ...patch };
     const { data, error } = await supabase.from("participation").upsert(partToRow(merged), { onConflict: "event_id,member_id" }).select().single();
     const saved = !error && data ? rowToPart(data) : merged;
     setParticipation((prev) => existing ? prev.map((p) => p === existing ? saved : p) : [...prev, saved]);
   }, [participation]);
   const toggleSignUp = useCallback((eventId, memberId, v) => upsertParticipation(eventId, memberId, { signedUp: v }), [upsertParticipation]);
-  const toggleAttend = useCallback((eventId, memberId, v) => upsertParticipation(eventId, memberId, { attended: v, partial: v ? undefined : false }), [upsertParticipation]);
-  const togglePartial = useCallback((eventId, memberId, v) => upsertParticipation(eventId, memberId, { partial: v }), [upsertParticipation]);
+  const toggleAttend = useCallback((eventId, memberId, v) => upsertParticipation(eventId, memberId, { attended: v, durationStatus: v ? undefined : "full" }), [upsertParticipation]);
+  const setDuration = useCallback((eventId, memberId, status) => upsertParticipation(eventId, memberId, { durationStatus: status }), [upsertParticipation]);
   const setScore = useCallback((eventId, memberId, score) => upsertParticipation(eventId, memberId, { score }), [upsertParticipation]);
   const setNote = useCallback((eventId, memberId, note) => upsertParticipation(eventId, memberId, { note }), [upsertParticipation]);
   const setStrategy = useCallback((eventId, memberId, strategy) => upsertParticipation(eventId, memberId, { strategy }), [upsertParticipation]);
@@ -2034,7 +2054,7 @@ export default function App() {
       return {
         Event: ev ? ev.name : p.eventId, Date: ev ? ev.date : "", Member: m ? m.name : p.memberId,
         "Signed up": p.signedUp ? "Yes" : "No", Attended: p.attended ? "Yes" : "No",
-        "Full duration": p.attended ? (p.partial ? "No — left early" : "Yes") : "",
+        "Duration": p.attended ? ({ full: "Full", left_early: "Left early", late: "Arrived late", vanished: "Vanished mid-event" }[p.durationStatus || "full"]) : "",
         Score: p.score, Strategy: p.strategy ? (STRATEGY_LABELS[p.strategy] || p.strategy) : "", Notes: p.note || "",
       };
     });
@@ -2234,7 +2254,7 @@ export default function App() {
       {(showAddMember || memberModal) && <MemberModal member={memberModal} onClose={() => { setShowAddMember(false); setMemberModal(null); }} onSave={saveMember} onDelete={deleteMember} />}
       {showLogGrowth && <LogGrowthModal members={roster} profiles={growth} initialMemberId={growthPreset} onClose={() => { setShowLogGrowth(false); setGrowthPreset(null); }} onSave={saveGrowth} />}
       {showAddEvent && <EventModal onClose={() => setShowAddEvent(false)} onSave={addEvent} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} />}
-      {openEvent && <EventDetail event={openEvent} members={members} participation={participation} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} onClose={() => setOpenEvent(null)} onDelete={deleteEvent} onToggleSignUp={toggleSignUp} onToggleAttend={toggleAttend} onTogglePartial={togglePartial} onScore={setScore} onNote={setNote} onSetStrategy={setStrategy} onImportFromPlan={importFromPlan} />}
+      {openEvent && <EventDetail event={openEvent} members={members} participation={participation} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} onClose={() => setOpenEvent(null)} onDelete={deleteEvent} onToggleSignUp={toggleSignUp} onToggleAttend={toggleAttend} onSetDuration={setDuration} onScore={setScore} onNote={setNote} onSetStrategy={setStrategy} onImportFromPlan={importFromPlan} />}
     </div>
   );
 }
