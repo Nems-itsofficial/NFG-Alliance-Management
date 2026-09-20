@@ -260,6 +260,18 @@ function RankBadge({ rank }) {
   const c = colors[rank] || "#5C7086";
   return <span className="wsc-badge" style={{ background: `${c}22`, color: c }}>{rank}</span>;
 }
+function RankBubble({ rank }) {
+  const colors = { R5: "#F2C94C", R4: "#6FCBEA", R3: "#8397AA", R2: "#5C7086", R1: "#3E4E5E" };
+  const c = colors[rank] || "#5C7086";
+  const num = rank ? rank.replace("R", "") : "?";
+  return (
+    <span title={rank} style={{
+      display: "inline-flex", alignItems: "center", justifyContent: "center",
+      width: 20, height: 20, borderRadius: "50%", background: `${c}22`, border: `1px solid ${c}66`,
+      color: c, fontSize: 10.5, fontWeight: 700, fontFamily: "var(--font-mono)", flexShrink: 0,
+    }}>{num}</span>
+  );
+}
 const NEON_COLORS = ["#39FF88", "#00E5FF", "#FF3EC8", "#FFD23F", "#B14EFF", "#FF5F5F", "#4EFFE0"];
 const roleColor = (label) => {
   if (!label) return "#5C7086";
@@ -624,19 +636,25 @@ function Dashboard({ members, growth, events, participation, config }) {
   }, [participation, activeMembers, events]);
   const activeCount = activeMembers.length;
   const latestEvent = events.length ? [...events].sort((a, b) => b.date.localeCompare(a.date))[0] : null;
-  const latestEventAttendance = latestEvent && activeCount > 0 ? participation.filter((p) => p.eventId === latestEvent.id && p.attended).length / activeCount : null;
+  const latestEventSignups = latestEvent ? participation.filter((p) => p.eventId === latestEvent.id && p.signedUp).length : 0;
+  const latestEventAttendance = latestEvent && latestEventSignups > 0 ? participation.filter((p) => p.eventId === latestEvent.id && p.attended).length / latestEventSignups : null;
   const readiness = latestEventAttendance !== null ? Math.round(latestEventAttendance * 100) : 0;
   const recentEvents = useMemo(() => [...events].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6).map((ev) => {
     const rows = participation.filter((p) => p.eventId === ev.id);
     const signed = rows.filter((p) => p.signedUp).length, attended = rows.filter((p) => p.attended).length;
-    const rate = activeCount > 0 ? Math.round((attended / activeCount) * 100) : 0;
+    const rate = signed > 0 ? Math.round((attended / signed) * 100) : 0;
     return { ev, signed, attended, rate };
-  }), [events, participation, activeCount]);
+  }), [events, participation]);
   const avgTurnout = useMemo(() => {
-    if (events.length === 0 || activeCount === 0) return 0;
-    const total = events.reduce((sum, e) => sum + participation.filter((p) => p.eventId === e.id && p.attended).length / activeCount, 0);
-    return Math.round((total / events.length) * 100);
-  }, [events, participation, activeCount]);
+    const withSignups = events.filter((e) => participation.some((p) => p.eventId === e.id && p.signedUp));
+    if (withSignups.length === 0) return 0;
+    const total = withSignups.reduce((sum, e) => {
+      const rows = participation.filter((p) => p.eventId === e.id);
+      const signed = rows.filter((p) => p.signedUp).length, attended = rows.filter((p) => p.attended).length;
+      return sum + (signed > 0 ? attended / signed : 0);
+    }, 0);
+    return Math.round((total / withSignups.length) * 100);
+  }, [events, participation]);
   const totalPower = useMemo(() => {
     const byMember = {}; growth.forEach((g) => { byMember[g.memberId] = g; });
     return activeMembers.reduce((sum, m) => {
@@ -1060,7 +1078,7 @@ function GrowthTab({ members, growth, participation, onEditMember }) {
                     const a = attendanceByMember[m.id];
                     return (
                       <tr key={m.id} style={{ cursor: "pointer" }} onClick={() => onEditMember(m.id)}>
-                        <td style={{ fontWeight: 600 }}>{m.name}</td>
+                        <td style={{ fontWeight: 600 }}><span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><RankBubble rank={m.rank} />{m.name}</span></td>
                         <td style={{ fontFamily: "var(--font-mono)" }}>{g && g.power !== "" ? fmtNum(g.power) : "—"}</td>
                         <td style={{ fontFamily: "var(--font-mono)", color: "var(--steel)" }}>{a ? `${a.attended}/${a.signedUp}` : "—"}</td>
                         <td style={{ fontFamily: "var(--font-mono)" }}>{g?.furnaceLevel || "—"}</td>
@@ -1300,7 +1318,7 @@ function EventsTab({ events, members, participation, onOpenEvent }) {
                   const signed = rows.filter((p) => p.signedUp).length, attended = rows.filter((p) => p.attended).length;
                   const partial = rows.filter((p) => p.attended && p.durationStatus === "left_early").length;
                   const noShows = rows.filter((p) => p.signedUp && !p.attended).length;
-                  const rate = activeMembers.length > 0 ? Math.round((attended / activeMembers.length) * 100) : 0;
+                  const rate = signed > 0 ? Math.round((attended / signed) * 100) : 0;
                   return (
                     <tr key={ev.id} style={{ cursor: "pointer" }} onClick={() => onOpenEvent(ev)}>
                       <td style={{ color: "var(--steel)" }}>{fmtDate(ev.date)}</td>
@@ -2102,9 +2120,10 @@ export default function App() {
 
     const recentEvents = [...events].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10).map((ev) => {
       const rows = participation.filter((p) => p.eventId === ev.id);
+      const signed = rows.filter((p) => p.signedUp).length;
       const attended = rows.filter((p) => p.attended).length;
-      const rate = activeMembers.length > 0 ? Math.round((attended / activeMembers.length) * 100) : 0;
-      return { Date: ev.date, Event: ev.name + (ev.session ? ` (${ev.session})` : ""), "Signed up": rows.filter((p) => p.signedUp).length, Attended: attended, "Turnout %": rate };
+      const rate = signed > 0 ? Math.round((attended / signed) * 100) : 0;
+      return { Date: ev.date, Event: ev.name + (ev.session ? ` (${ev.session})` : ""), "Signed up": signed, Attended: attended, "Turnout %": rate };
     });
 
     const aoa = [
