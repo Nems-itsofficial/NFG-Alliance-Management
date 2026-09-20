@@ -589,32 +589,36 @@ function T12SkillCard({ members, growth }) {
 function Dashboard({ members, growth, events, participation, config }) {
   const activeMembers = members.filter((m) => m.status !== "left");
   const leaverCount = members.length - activeMembers.length;
-  const noShows = useMemo(() => {
-    const counts = {};
-    participation.forEach((p) => { if (p.signedUp && !p.attended) counts[p.memberId] = (counts[p.memberId] || 0) + 1; });
-    return Object.entries(counts).map(([memberId, count]) => ({ member: activeMembers.find((m) => m.id === memberId), count }))
-      .filter((r) => r.member && r.count >= 2).sort((a, b) => b.count - a.count).slice(0, 8);
-  }, [participation, activeMembers]);
+  // Missing a Tyrant Battle or SvS Battle counts double toward the liability rate below —
+  // these are treated as higher-stakes alliance events than a regular one.
+  const HIGH_STAKES_TYPES = new Set(["Tyrant Battle", "SvS Battle"]);
+  const eventWeight = (type) => (HIGH_STAKES_TYPES.has(type) ? 2 : 1);
   const unreliableAttendance = useMemo(() => {
-    const eventDateById = {}; events.forEach((e) => { eventDateById[e.id] = e.date; });
-    const stats = {}; // memberId -> { signedUp, leftEarly, late, vanished, lastNote, lastDate }
+    const eventById = {}; events.forEach((e) => { eventById[e.id] = e; });
+    const stats = {}; // memberId -> { signedUpWeight, liabilityWeight, noShow, leftEarly, late, vanished, lastNote, lastDate }
     participation.forEach((p) => {
       if (!p.signedUp) return;
-      if (!stats[p.memberId]) stats[p.memberId] = { signedUp: 0, leftEarly: 0, late: 0, vanished: 0, lastNote: "", lastDate: "" };
+      const ev = eventById[p.eventId];
+      const w = eventWeight(ev?.type);
+      if (!stats[p.memberId]) stats[p.memberId] = { signedUpWeight: 0, liabilityWeight: 0, noShow: 0, leftEarly: 0, late: 0, vanished: 0, lastNote: "", lastDate: "" };
       const s = stats[p.memberId];
-      s.signedUp += 1;
-      if (p.attended && p.durationStatus && p.durationStatus !== "full") {
-        if (p.durationStatus === "left_early") s.leftEarly += 1;
+      s.signedUpWeight += w;
+      const isNoShow = !p.attended;
+      const isPartialIssue = p.attended && p.durationStatus && p.durationStatus !== "full";
+      if (isNoShow || isPartialIssue) {
+        s.liabilityWeight += w;
+        if (isNoShow) s.noShow += 1;
+        else if (p.durationStatus === "left_early") s.leftEarly += 1;
         else if (p.durationStatus === "late") s.late += 1;
         else if (p.durationStatus === "vanished") s.vanished += 1;
-        const evDate = eventDateById[p.eventId] || "";
+        const evDate = ev?.date || "";
         if (!s.lastDate || evDate >= s.lastDate) { s.lastDate = evDate; s.lastNote = p.note || ""; }
       }
     });
     return Object.entries(stats).map(([memberId, s]) => {
-      const liabilityCount = s.leftEarly + s.late + s.vanished;
-      const ratio = s.signedUp > 0 ? liabilityCount / s.signedUp : 0;
-      return { member: activeMembers.find((m) => m.id === memberId), liabilityCount, ratio, ...s };
+      const liabilityCount = s.noShow + s.leftEarly + s.late + s.vanished;
+      const ratio = s.signedUpWeight > 0 ? s.liabilityWeight / s.signedUpWeight : 0;
+      return { member: activeMembers.find((m) => m.id === memberId), liabilityCount, ratio, signedUp: s.signedUpWeight, ...s };
     }).filter((r) => r.member && r.liabilityCount >= 2 && r.ratio >= 0.5)
       .sort((a, b) => b.ratio - a.ratio).slice(0, 8);
   }, [participation, activeMembers, events]);
@@ -664,30 +668,22 @@ function Dashboard({ members, growth, events, participation, config }) {
         </div>
         <EndgameProgressChart members={activeMembers} growth={growth} />
       </div>
-      <div className="wsc-grid-pair">
-        <div className="wsc-card">
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><Ban size={15} color="var(--danger)" /><div className="wsc-stat-label" style={{ margin: 0 }}>Frequent no-shows</div></div>
-          {noShows.length === 0 ? <EmptyState title="No repeat no-shows" body="Members who sign up but don't attend twice or more will show here." /> : (
-            <table className="wsc-table"><thead><tr><th>Member</th><th>No-shows</th></tr></thead>
-              <tbody>{noShows.map(({ member, count }) => <tr key={member.id}><td>{member.name}</td><td style={{ color: "var(--danger)", fontFamily: "var(--font-mono)" }}>{count}</td></tr>)}</tbody></table>
-          )}
-        </div>
-        <T12SkillCard members={activeMembers} growth={growth} />
-      </div>
+      <div style={{ marginTop: 14 }}><T12SkillCard members={activeMembers} growth={growth} /></div>
       <div className="wsc-card" style={{ marginTop: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><LogOut size={15} color="var(--amber)" /><div className="wsc-stat-label" style={{ margin: 0 }}>Unreliable Attendance</div></div>
-        {unreliableAttendance.length === 0 ? <EmptyState title="No liability concerns" body="Members whose left-early, late, or vanished-mid-event incidents make up half or more of their signed-up events will show here, along with their most recent note. Occasional incidents roll off on their own as good attendance dilutes the ratio." /> : (
+        {unreliableAttendance.length === 0 ? <EmptyState title="No liability concerns" body="Members whose no-shows, left-early, late, or vanished-mid-event incidents make up half or more of their signed-up events will show here, along with their most recent note. Missing a Tyrant Battle or SvS Battle counts double. Occasional incidents roll off on their own as good attendance dilutes the rate." /> : (
           <table className="wsc-table"><thead><tr><th>Member</th><th>Breakdown</th><th>Rate</th><th>Last note</th></tr></thead>
-            <tbody>{unreliableAttendance.map(({ member, leftEarly, late, vanished, ratio, signedUp, lastNote }) => {
+            <tbody>{unreliableAttendance.map(({ member, noShow, leftEarly, late, vanished, ratio, lastNote }) => {
               const parts = [];
+              if (noShow) parts.push(`No-show ×${noShow}`);
               if (leftEarly) parts.push(`Left early ×${leftEarly}`);
               if (late) parts.push(`Late ×${late}`);
               if (vanished) parts.push(`Vanished ×${vanished}`);
               return (
                 <tr key={member.id}>
                   <td>{member.name}</td>
-                  <td style={{ color: "var(--amber)" }}>{parts.join(" · ")}</td>
-                  <td style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)" }}>{Math.round(ratio * 100)}% of {signedUp}</td>
+                  <td style={{ color: "var(--danger)" }}>{parts.join(" · ")}</td>
+                  <td style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)" }}>{Math.round(ratio * 100)}%</td>
                   <td style={{ color: "var(--steel-dim)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={lastNote}>{lastNote || "—"}</td>
                 </tr>
               );
