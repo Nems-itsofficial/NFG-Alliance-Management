@@ -87,6 +87,79 @@ const TenureLabel = ({ joinDate, endDate }) => {
   const val = formatTenure(joinDate, endDate);
   return val === "Unknown" ? <span style={{ color: "var(--steel-dim)", fontStyle: "italic" }}>Unknown</span> : <span>{val}</span>;
 };
+// ---------- Attendance reliability: ONE shared calculation for Dashboard, Player Data and exports ----------
+const DURATION_LABELS = { full: "Full", left_early: "Left early", late: "Arrived late", vanished: "Offline in between" };
+const ROLE_EVENT_TYPES = new Set(["Foundry Battle", "Canyon Clash"]); // events that use Joiner / Sub roles (30 / 10)
+const STATE_EVENT_TYPES = new Set(["Tyrant Battle", "SvS Battle"]);   // state-wide events: heavier weights
+const usesRoles = (type) => ROLE_EVENT_TYPES.has(type);
+const RELIABILITY = {
+  window: 5, minIncidents: 2, minRate: 0.5, trendThreshold: 0.1, trendMinSignUps: 3,
+  weights: {
+    joiner: { noShow: 0.5, partial: 0.25, worth: 0.5 },
+    sub: { noShow: 0.25, partial: 0, worth: 0.25 },
+    state: { noShow: 1, partial: 0.5, worth: 1 },
+  },
+};
+const RELIABILITY_EPS = 1e-9;
+const weightGroup = (type, role) => (STATE_EVENT_TYPES.has(type) ? "state" : usesRoles(type) && role === "sub" ? "sub" : "joiner");
+function computeReliability(participation, events, today) {
+  const eventById = {}; events.forEach((e) => { eventById[e.id] = e; });
+  const perMember = {};
+  participation.forEach((p) => {
+    if (!p.signedUp) return;
+    const ev = eventById[p.eventId];
+    if (!ev || ev.date > today) return; // future-dated events never count
+    const w = RELIABILITY.weights[weightGroup(ev.type, p.role)];
+    const isNoShow = !p.attended;
+    const partial = p.attended && p.durationStatus && p.durationStatus !== "full" && w.partial > 0 ? p.durationStatus : null;
+    if (!perMember[p.memberId]) perMember[p.memberId] = [];
+    perMember[p.memberId].push({
+      date: ev.date, eventId: ev.id, attended: !!p.attended, note: p.note || "", worth: w.worth,
+      kind: isNoShow ? "noShow" : partial || "clean", lost: isNoShow ? w.noShow : partial ? w.partial : 0,
+    });
+  });
+  const aggregate = (rows) => {
+    const a = { signUps: rows.length, incidents: 0, lost: 0, atStake: 0, noShow: 0, left_early: 0, late: 0, vanished: 0, lastNote: "", lastDate: "" };
+    rows.forEach((r) => {
+      a.atStake += r.worth; a.lost += r.lost;
+      if (r.kind !== "clean") {
+        a.incidents += 1; a[r.kind] += 1;
+        if (r.date >= a.lastDate) { a.lastDate = r.date; a.lastNote = r.note; }
+      }
+    });
+    a.rate = a.atStake > 0 ? a.lost / a.atStake : 0;
+    return a;
+  };
+  const out = {};
+  Object.entries(perMember).forEach(([memberId, rows]) => {
+    rows.sort((x, y) => x.date.localeCompare(y.date) || x.eventId.localeCompare(y.eventId));
+    const all = aggregate(rows);
+    const recent = aggregate(rows.slice(-RELIABILITY.window));
+    const diff = recent.rate - all.rate;
+    const T = RELIABILITY.trendThreshold;
+    out[memberId] = {
+      signUps: all.signUps, attended: rows.filter((r) => r.attended).length, all, recent,
+      trend: diff >= T - RELIABILITY_EPS ? "worsening" : diff <= -T + RELIABILITY_EPS ? "improving" : "steady",
+      trendVisible: all.signUps >= RELIABILITY.trendMinSignUps,
+      flagged: recent.incidents >= RELIABILITY.minIncidents && recent.rate >= RELIABILITY.minRate - RELIABILITY_EPS,
+    };
+  });
+  return out;
+}
+const breakdownParts = (a) => {
+  const parts = [];
+  if (a.noShow) parts.push(`No-show ×${a.noShow}`);
+  if (a.left_early) parts.push(`Left early ×${a.left_early}`);
+  if (a.late) parts.push(`Late ×${a.late}`);
+  if (a.vanished) parts.push(`Offline ×${a.vanished}`);
+  return parts;
+};
+function TrendMark({ trend, withLabel }) {
+  const map = { worsening: ["▲", "var(--danger)", "Worsening"], improving: ["▼", "var(--success)", "Improving"], steady: ["–", "var(--steel-dim)", "Steady"] };
+  const [sym, color, label] = map[trend] || map.steady;
+  return <span style={{ color, fontWeight: 700 }} title={`Unreliability trend: ${label.toLowerCase()}`}>{sym}{withLabel ? ` ${label}` : ""}</span>;
+}
+
 const SKILL_LABELS = ["No skill", "1st skill", "2nd skill", "3rd skill"];
 
 // ---------------------------------------------------------------- data layer (Supabase)
@@ -96,8 +169,8 @@ const rowToGrowth = (r) => ({ memberId: r.member_id, power: r.power ?? "", previ
 const growthToRow = (g) => ({ member_id: g.memberId, power: g.power === "" ? null : g.power, previous_power: g.previousPower === "" ? null : g.previousPower, furnace_level: g.furnaceLevel || "", classes: g.classes || {}, updated_date: g.updatedDate || null });
 const rowToEvent = (r) => ({ id: r.id, date: r.date, type: r.type, name: r.name, session: r.session || "", mode: r.mode || "score", linkedType: r.linked_type || "", linkedId: r.linked_id || "" });
 const eventToRow = (e) => ({ date: e.date, type: e.type, name: e.name, session: e.session || "", mode: e.mode || "score", linked_type: e.linkedType || null, linked_id: e.linkedId || null });
-const rowToPart = (r) => ({ id: r.id, eventId: r.event_id, memberId: r.member_id, signedUp: !!r.signed_up, attended: !!r.attended, durationStatus: r.duration_status || "full", score: r.score ?? "", note: r.note || "", strategy: r.strategy || "" });
-const partToRow = (p) => ({ event_id: p.eventId, member_id: p.memberId, signed_up: !!p.signedUp, attended: !!p.attended, duration_status: p.durationStatus || "full", score: p.score === "" || p.score === undefined ? null : p.score, note: p.note || "", strategy: p.strategy || "" });
+const rowToPart = (r) => ({ id: r.id, eventId: r.event_id, memberId: r.member_id, signedUp: !!r.signed_up, attended: !!r.attended, durationStatus: r.duration_status || "full", role: r.role || "joiner", score: r.score ?? "", note: r.note || "", strategy: r.strategy || "" });
+const partToRow = (p) => ({ event_id: p.eventId, member_id: p.memberId, signed_up: !!p.signedUp, attended: !!p.attended, duration_status: p.durationStatus || "full", role: p.role || "joiner", score: p.score === "" || p.score === undefined ? null : p.score, note: p.note || "", strategy: p.strategy || "" });
 const rowToCanyon = (r) => ({ id: r.id, name: r.name, date: r.date || "", seats: r.seats || {} });
 const canyonToRow = (c) => ({ name: c.name, date: c.date || null, seats: c.seats || {} });
 const rowToFoundry = (r) => ({ id: r.id, name: r.name, date: r.date || "", legion: r.legion || "LG1", seats: r.seats || {} });
@@ -453,7 +526,7 @@ function ConfigModal({ config, onClose, onSave, onExportExcel, onExportSummary, 
           <input ref={fileRef} type="file" accept="application/json" style={{ display: "none" }} onChange={handleFileChange} />
         </div>
         <div style={{ fontSize: 12.5, color: "var(--steel-dim)" }}>
-          Full data is every row, raw. Summary is a one-page digest — snapshot stats, who's reliable, who's not, troop spread, recent turnout — meant for sharing with officers who don't need the raw tables. The .json backup is a full, exact copy of everything here — use it to restore into this app later, or as a record if you ever move off Claude.
+          Full data is every row, raw. Summary is a one-page digest — snapshot stats, who's reliable, who's not, troop spread, recent show-up rate — meant for sharing with officers who don't need the raw tables. The .json backup is a full, exact copy of everything here — use it to restore into this app later, or as a record if you ever move off Claude.
           {importMsg && <div style={{ color: "var(--frost)", marginTop: 6 }}>{importMsg}</div>}
         </div>
       </div>
@@ -598,55 +671,29 @@ function T12SkillCard({ members, growth }) {
   );
 }
 
-function Dashboard({ members, growth, events, participation, config }) {
+function Dashboard({ members, growth, events, participation, config, reliability }) {
   const activeMembers = members.filter((m) => m.status !== "left");
   const leaverCount = members.length - activeMembers.length;
-  // Missing a Tyrant Battle or SvS Battle counts double toward the liability rate below —
-  // these are treated as higher-stakes alliance events than a regular one.
-  const HIGH_STAKES_TYPES = new Set(["Tyrant Battle", "SvS Battle"]);
-  const eventWeight = (type) => (HIGH_STAKES_TYPES.has(type) ? 2 : 1);
-  const unreliableAttendance = useMemo(() => {
-    const eventById = {}; events.forEach((e) => { eventById[e.id] = e; });
-    const stats = {}; // memberId -> { signedUpWeight, liabilityWeight, noShow, leftEarly, late, vanished, lastNote, lastDate }
-    participation.forEach((p) => {
-      if (!p.signedUp) return;
-      const ev = eventById[p.eventId];
-      const w = eventWeight(ev?.type);
-      if (!stats[p.memberId]) stats[p.memberId] = { signedUpWeight: 0, liabilityWeight: 0, noShow: 0, leftEarly: 0, late: 0, vanished: 0, lastNote: "", lastDate: "" };
-      const s = stats[p.memberId];
-      s.signedUpWeight += w;
-      const isNoShow = !p.attended;
-      const isPartialIssue = p.attended && p.durationStatus && p.durationStatus !== "full";
-      if (isNoShow || isPartialIssue) {
-        s.liabilityWeight += w;
-        if (isNoShow) s.noShow += 1;
-        else if (p.durationStatus === "left_early") s.leftEarly += 1;
-        else if (p.durationStatus === "late") s.late += 1;
-        else if (p.durationStatus === "vanished") s.vanished += 1;
-        const evDate = ev?.date || "";
-        if (!s.lastDate || evDate >= s.lastDate) { s.lastDate = evDate; s.lastNote = p.note || ""; }
-      }
-    });
-    return Object.entries(stats).map(([memberId, s]) => {
-      const liabilityCount = s.noShow + s.leftEarly + s.late + s.vanished;
-      const ratio = s.signedUpWeight > 0 ? s.liabilityWeight / s.signedUpWeight : 0;
-      return { member: activeMembers.find((m) => m.id === memberId), liabilityCount, ratio, signedUp: s.signedUpWeight, ...s };
-    }).filter((r) => r.member && r.liabilityCount >= 2 && r.ratio >= 0.5)
-      .sort((a, b) => b.ratio - a.ratio).slice(0, 8);
-  }, [participation, activeMembers, events]);
+  const today = todayStr();
+  const unreliable = useMemo(() => activeMembers
+    .map((m) => ({ member: m, r: reliability[m.id] }))
+    .filter((x) => x.r && x.r.flagged)
+    .sort((a, b) => b.r.recent.rate - a.r.recent.rate), [activeMembers, reliability]);
   const activeCount = activeMembers.length;
-  const latestEvent = events.length ? [...events].sort((a, b) => b.date.localeCompare(a.date))[0] : null;
-  const latestEventSignups = latestEvent ? participation.filter((p) => p.eventId === latestEvent.id && p.signedUp).length : 0;
+  const signedByEvent = useMemo(() => { const m = {}; participation.forEach((p) => { if (p.signedUp) m[p.eventId] = (m[p.eventId] || 0) + 1; }); return m; }, [participation]);
+  const latestEvent = [...events].filter((e) => e.date <= today && signedByEvent[e.id] > 0)
+    .sort((a, b) => b.date.localeCompare(a.date) || signedByEvent[b.id] - signedByEvent[a.id])[0] || null;
+  const latestEventSignups = latestEvent ? signedByEvent[latestEvent.id] : 0;
   const latestEventAttendance = latestEvent && latestEventSignups > 0 ? participation.filter((p) => p.eventId === latestEvent.id && p.attended).length / latestEventSignups : null;
   const readiness = latestEventAttendance !== null ? Math.round(latestEventAttendance * 100) : 0;
-  const recentEvents = useMemo(() => [...events].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6).map((ev) => {
+  const recentEvents = useMemo(() => [...events].filter((e) => e.date <= today).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6).map((ev) => {
     const rows = participation.filter((p) => p.eventId === ev.id);
     const signed = rows.filter((p) => p.signedUp).length, attended = rows.filter((p) => p.attended).length;
     const rate = signed > 0 ? Math.round((attended / signed) * 100) : 0;
     return { ev, signed, attended, rate };
   }), [events, participation]);
   const avgTurnout = useMemo(() => {
-    const withSignups = events.filter((e) => participation.some((p) => p.eventId === e.id && p.signedUp));
+    const withSignups = events.filter((e) => e.date <= today && signedByEvent[e.id] > 0);
     if (withSignups.length === 0) return 0;
     const total = withSignups.reduce((sum, e) => {
       const rows = participation.filter((p) => p.eventId === e.id);
@@ -676,42 +723,42 @@ function Dashboard({ members, growth, events, participation, config }) {
       <div className="wsc-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px,1fr))", marginBottom: 14 }}>
         <div className="wsc-card"><div className="wsc-stat-label">Total members</div><div className="wsc-stat-val">{activeMembers.length}</div></div>
         <div className="wsc-card"><div className="wsc-stat-label">Events logged</div><div className="wsc-stat-val">{events.length}</div></div>
-        <div className="wsc-card"><div className="wsc-stat-label">Avg turnout</div><div className="wsc-stat-val">{events.length > 0 ? `${avgTurnout}%` : "—"}</div></div>
+        <div className="wsc-card"><div className="wsc-stat-label">Avg show-up rate</div><div className="wsc-stat-val">{events.length > 0 ? `${avgTurnout}%` : "—"}</div></div>
         <div className="wsc-card"><div className="wsc-stat-label">Leavers on file</div><div className="wsc-stat-val">{leaverCount}</div></div>
       </div>
       <div className="wsc-grid-hero">
         <div className="wsc-card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6 }}>
           <ReadinessGauge score={isNaN(readiness) ? 0 : readiness} />
-          <div style={{ fontSize: 12, color: "var(--steel-dim)", textAlign: "center" }}>{latestEvent ? "Turnout at the most recent event." : "Log an event to see turnout here."}</div>
+          <div style={{ fontSize: 12, color: "var(--steel-dim)", textAlign: "center" }}>{latestEvent ? "Show-up rate at the most recent event." : "Log an event to see the show-up rate here."}</div>
         </div>
         <EndgameProgressChart members={activeMembers} growth={growth} />
       </div>
       <div style={{ marginTop: 14 }}><T12SkillCard members={activeMembers} growth={growth} /></div>
       <div className="wsc-card" style={{ marginTop: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><LogOut size={15} color="var(--amber)" /><div className="wsc-stat-label" style={{ margin: 0 }}>Unreliable Attendance</div></div>
-        {unreliableAttendance.length === 0 ? <EmptyState title="No liability concerns" body="Members whose no-shows, left-early, late, or vanished-mid-event incidents make up half or more of their signed-up events will show here, along with their most recent note. Missing a Tyrant Battle or SvS Battle counts double. Occasional incidents roll off on their own as good attendance dilutes the rate." /> : (
-          <table className="wsc-table"><thead><tr><th>Member</th><th>Breakdown</th><th>Rate</th><th>Last note</th></tr></thead>
-            <tbody>{unreliableAttendance.map(({ member, noShow, leftEarly, late, vanished, ratio, lastNote }) => {
-              const parts = [];
-              if (noShow) parts.push(`No-show ×${noShow}`);
-              if (leftEarly) parts.push(`Left early ×${leftEarly}`);
-              if (late) parts.push(`Late ×${late}`);
-              if (vanished) parts.push(`Vanished ×${vanished}`);
-              return (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <LogOut size={15} color="var(--amber)" /><div className="wsc-stat-label" style={{ margin: 0 }}>Unreliable Attendance</div>
+          {unreliable.length > 0 && <span style={{ fontSize: 11.5, color: "var(--steel-dim)" }}>{unreliable.length} flagged</span>}
+        </div>
+        {unreliable.length === 0 ? <EmptyState title="No liability concerns" body="Members with 2+ incidents (no-show, late, offline in between or left early) making up half or more of their last 5 sign-ups will show here, with their most recent note. Older incidents roll off on their own as new sign-ups come in." /> : (
+          <div style={{ maxHeight: 380, overflowY: "auto" }}>
+            <table className="wsc-table"><thead><tr><th>Member</th><th>Breakdown</th><th title="Last 5 sign-ups">Recent</th><th title="All sign-ups">All-time</th><th title="Recent rate vs all-time rate">Trend</th><th>Last note</th></tr></thead>
+              <tbody>{unreliable.map(({ member, r }) => (
                 <tr key={member.id}>
                   <td>{member.name}</td>
-                  <td style={{ color: "var(--danger)" }}>{parts.join(" · ")}</td>
-                  <td style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)" }}>{Math.round(ratio * 100)}%</td>
-                  <td style={{ color: "var(--steel-dim)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={lastNote}>{lastNote || "—"}</td>
+                  <td style={{ color: "var(--danger)" }}>{breakdownParts(r.recent).join(" · ")}</td>
+                  <td style={{ color: "var(--steel)", fontFamily: "var(--font-mono)" }}>{Math.round(r.recent.rate * 100)}%</td>
+                  <td style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)" }}>{Math.round(r.all.rate * 100)}%</td>
+                  <td style={{ whiteSpace: "nowrap" }}>{r.trendVisible ? <TrendMark trend={r.trend} withLabel /> : <span style={{ color: "var(--steel-dim)" }}>—</span>}</td>
+                  <td style={{ color: "var(--steel-dim)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.recent.lastNote}>{r.recent.lastNote || "—"}</td>
                 </tr>
-              );
-            })}</tbody></table>
+              ))}</tbody></table>
+          </div>
         )}
       </div>
       <div className="wsc-card" style={{ marginTop: 14 }}>
-        <div className="wsc-stat-label" style={{ marginBottom: 10 }}>Recent event turnout</div>
+        <div className="wsc-stat-label" style={{ marginBottom: 10 }}>Recent event show-up rate</div>
         {recentEvents.length === 0 ? <EmptyState title="No events logged" body="Create one on the Events tab to start tracking who shows up." /> : (
-          <table className="wsc-table"><thead><tr><th>Date</th><th>Event</th><th>Signed up</th><th>Attended</th><th>Turnout</th></tr></thead>
+          <table className="wsc-table"><thead><tr><th>Date</th><th>Event</th><th>Signed up</th><th>Attended</th><th>Show-up rate</th></tr></thead>
             <tbody>{recentEvents.map(({ ev, signed, attended, rate }) => (
               <tr key={ev.id}><td style={{ color: "var(--steel)" }}>{fmtDate(ev.date)}</td><td style={{ fontWeight: 600 }}>{ev.name}{ev.session ? ` · ${ev.session}` : ""}</td>
                 <td style={{ fontFamily: "var(--font-mono)" }}>{signed}</td><td style={{ fontFamily: "var(--font-mono)", color: "var(--success)" }}>{attended}</td>
@@ -1010,21 +1057,16 @@ function MergedClassCell({ classes, mode }) {
     </span>
   );
 }
-function GrowthTab({ members, growth, participation, onEditMember }) {
+function GrowthTab({ members, growth, reliability, onEditMember }) {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState("name");
   const [sortDir, setSortDir] = useState("asc");
   const byMember = useMemo(() => { const map = {}; growth.forEach((g) => { map[g.memberId] = g; }); return map; }, [growth]);
   const attendanceByMember = useMemo(() => {
     const map = {};
-    participation.forEach((p) => {
-      if (!p.signedUp) return;
-      if (!map[p.memberId]) map[p.memberId] = { attended: 0, signedUp: 0 };
-      map[p.memberId].signedUp += 1;
-      if (p.attended) map[p.memberId].attended += 1;
-    });
+    Object.entries(reliability).forEach(([id, r]) => { map[id] = { attended: r.attended, signedUp: r.signUps }; });
     return map;
-  }, [participation]);
+  }, [reliability]);
   const filtered = members.filter((m) => m.name.toLowerCase().includes(query.toLowerCase()));
   const sortValue = (m) => {
     const g = byMember[m.id];
@@ -1064,6 +1106,7 @@ function GrowthTab({ members, growth, participation, onEditMember }) {
                   <SortHeader sortKeyName="name">Member</SortHeader>
                   <SortHeader sortKeyName="power">Power</SortHeader>
                   <SortHeader sortKeyName="attendance">Attendance</SortHeader>
+                  <th title="Unreliability trend: recent rate (last 5 sign-ups) vs all-time. Red ▲ = getting worse, green ▼ = improving. Shown from 3 sign-ups.">Trend</th>
                   <th>Furnace</th>
                   <th style={{ textAlign: "center" }}>Troop tier</th>
                   <th style={{ textAlign: "center" }}>FC level</th>
@@ -1072,7 +1115,7 @@ function GrowthTab({ members, growth, participation, onEditMember }) {
                 </tr></thead>
                 <tbody>
                   {sorted.length === 0 ? (
-                    <tr><td colSpan={8} style={{ padding: 20 }}><EmptyState title="No matches" body="Try a different search." /></td></tr>
+                    <tr><td colSpan={9} style={{ padding: 20 }}><EmptyState title="No matches" body="Try a different search." /></td></tr>
                   ) : sorted.map((m) => {
                     const g = byMember[m.id];
                     const a = attendanceByMember[m.id];
@@ -1081,6 +1124,7 @@ function GrowthTab({ members, growth, participation, onEditMember }) {
                         <td style={{ fontWeight: 600 }}><span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><RankBubble rank={m.rank} />{m.name}</span></td>
                         <td style={{ fontFamily: "var(--font-mono)" }}>{g && g.power !== "" ? fmtNum(g.power) : "—"}</td>
                         <td style={{ fontFamily: "var(--font-mono)", color: "var(--steel)" }}>{a ? `${a.attended}/${a.signedUp}` : "—"}</td>
+                        <td style={{ fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>{reliability[m.id]?.trendVisible ? <>{Math.round(reliability[m.id].recent.rate * 100)}% <TrendMark trend={reliability[m.id].trend} /></> : <span style={{ color: "var(--steel-dim)" }}>—</span>}</td>
                         <td style={{ fontFamily: "var(--font-mono)" }}>{g?.furnaceLevel || "—"}</td>
                         <td style={{ textAlign: "center" }}><MergedClassCell classes={g?.classes} mode="tier" /></td>
                         <td style={{ textAlign: "center" }}><MergedClassCell classes={g?.classes} mode="fc" /></td>
@@ -1129,11 +1173,11 @@ function EventModal({ onClose, onSave, canyonAssignments, foundryAssignments }) 
       <div className="wsc-field">
         <label className="wsc-label">Track by</label>
         <div style={{ display: "flex", gap: 8 }}>
-          <button type="button" className="wsc-btn" style={{ flex: 1, background: mode === "score" ? "var(--frost)" : "var(--panel-2)", color: mode === "score" ? "#08202C" : "var(--white)", borderColor: mode === "score" ? "var(--frost)" : "var(--border)" }} onClick={() => setMode("score")}>Score</button>
-          <button type="button" className="wsc-btn" style={{ flex: 1, background: mode === "strategy" ? "var(--frost)" : "var(--panel-2)", color: mode === "strategy" ? "#08202C" : "var(--white)", borderColor: mode === "strategy" ? "var(--frost)" : "var(--border)" }} onClick={() => setMode("strategy")}>Strategy compliance</button>
+          <button type="button" className="wsc-btn" style={{ flex: 1, background: mode === "score" ? "var(--frost)" : "var(--panel-2)", color: mode === "score" ? "#08202C" : "var(--white)", borderColor: mode === "score" ? "var(--frost)" : "var(--border)" }} onClick={() => setMode("score")}>Score Record</button>
+          <button type="button" className="wsc-btn" style={{ flex: 1, background: mode === "strategy" ? "var(--frost)" : "var(--panel-2)", color: mode === "strategy" ? "#08202C" : "var(--white)", borderColor: mode === "strategy" ? "var(--frost)" : "var(--border)" }} onClick={() => setMode("strategy")}>Battle Record</button>
         </div>
         <div style={{ fontSize: 12, color: "var(--steel-dim)", marginTop: 6 }}>
-          {mode === "score" ? "Log a numeric score per member — good for events like SvS Battle or Tyrant Battle." : "Track whether each member followed the called strategy — good for coordinated events like Foundry Battle or Canyon Clash. Produces a ranked leaderboard."}
+          {mode === "score" ? "Log a numeric score per member — good for events like SvS Battle or Tyrant Battle." : "Track who attended and whether they stayed the full time — good for coordinated events like Foundry Battle or Canyon Clash."}
         </div>
       </div>
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -1145,20 +1189,12 @@ function EventModal({ onClose, onSave, canyonAssignments, foundryAssignments }) 
   );
 }
 const STRATEGY_LABELS = { followed: "Followed strategy", partial: "Partially followed", none: "Did not follow" };
-const strategyPoints = (p) => {
-  if (!p?.attended) return -1;
-  let pts = 2;
-  if (!p.durationStatus || p.durationStatus === "full") pts += 1;
-  if (p.strategy === "followed") pts += 2;
-  else if (p.strategy === "partial") pts += 1;
-  return pts;
-};
 function ModeBadge({ mode }) {
   const isStrategy = mode === "strategy";
   const c = isStrategy ? "#B14EFF" : "#6FCBEA";
   return (
     <span className="wsc-role-badge" style={{ color: c, borderColor: c, boxShadow: `0 0 6px ${c}66, 0 0 1px ${c}`, marginLeft: 8 }}>
-      {isStrategy ? "Strategy" : "Score"}
+      {isStrategy ? "Battle Record" : "Score Record"}
     </span>
   );
 }
@@ -1202,17 +1238,26 @@ function AddParticipantPicker({ members, excludeIds, onAdd }) {
     </div>
   );
 }
-function EventDetail({ event, members, participation, canyonAssignments, foundryAssignments, onClose, onDelete, onToggleSignUp, onToggleAttend, onSetDuration, onScore, onNote, onSetStrategy, onImportFromPlan }) {
-  const isStrategy = event.mode === "strategy";
+function RolePill({ role, onToggle }) {
+  const sub = role === "sub";
+  return (
+    <button type="button" onClick={onToggle} title={sub ? "Sub - click to switch to Joiner" : "Joiner - click to switch to Sub"}
+      style={{ marginLeft: 8, padding: "1px 8px", borderRadius: 20, cursor: "pointer", fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase",
+        fontFamily: "var(--font-mono)", background: sub ? "#E8A33D22" : "transparent", color: sub ? "var(--amber)" : "var(--steel-dim)", border: `1px solid ${sub ? "#E8A33D88" : "var(--border)"}` }}>
+      {sub ? "Sub" : "Joiner"}
+    </button>
+  );
+}
+function EventDetail({ event, members, participation, canyonAssignments, foundryAssignments, onClose, onDelete, onToggleSignUp, onToggleAttend, onSetDuration, onSetRole, onScore, onNote, onImportFromPlan }) {
+  const isBattle = event.mode === "strategy"; // stored value stays "strategy"; shown as Battle Record
+  const hasRoles = usesRoles(event.type);
   const partMap = {};
   participation.filter((p) => p.eventId === event.id).forEach((p) => { partMap[p.memberId] = p; });
   const participantIds = new Set(Object.entries(partMap).filter(([, p]) => p.signedUp).map(([id]) => id));
-  let addedMembers = members.filter((m) => participantIds.has(m.id));
-  if (isStrategy) {
-    addedMembers = addedMembers.slice().sort((a, b) => strategyPoints(partMap[b.id]) - strategyPoints(partMap[a.id]));
-  }
+  const addedMembers = members.filter((m) => participantIds.has(m.id));
   const attendedCount = addedMembers.filter((m) => partMap[m.id]?.attended).length;
-  let rankCounter = 0;
+  const subCount = hasRoles ? addedMembers.filter((m) => partMap[m.id]?.role === "sub").length : 0;
+  const joinerCount = addedMembers.length - subCount;
   const handleDelete = () => {
     if (window.confirm(`Delete "${event.name}${event.session ? ` · ${event.session}` : ""}" and all its participation data? This can't be undone.`)) onDelete(event.id);
   };
@@ -1224,6 +1269,13 @@ function EventDetail({ event, members, participation, canyonAssignments, foundry
         <div style={{ fontSize: 13, color: "var(--steel-dim)" }}>
           {addedMembers.length} added · {attendedCount} attended
           <ModeBadge mode={event.mode} />
+          {hasRoles && (
+            <span style={{ marginLeft: 10, fontFamily: "var(--font-mono)", fontSize: 12 }}>
+              <span style={{ color: joinerCount > 30 ? "var(--amber)" : "var(--steel)" }} title={joinerCount > 30 ? "Over the 30-joiner limit" : undefined}>Joiners {joinerCount}/30</span>
+              <span style={{ color: "var(--steel-dim)" }}> · </span>
+              <span style={{ color: subCount > 10 ? "var(--amber)" : "var(--steel)" }} title={subCount > 10 ? "Over the 10-sub limit" : undefined}>Subs {subCount}/10</span>
+            </span>
+          )}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {linkedPlan && <button className="wsc-btn wsc-btn-sm" onClick={() => onImportFromPlan(event, linkedPlan)}><Users size={12} /> Import from "{linkedPlan.name}"</button>}
@@ -1232,58 +1284,40 @@ function EventDetail({ event, members, participation, canyonAssignments, foundry
       </div>
       <AddParticipantPicker members={members} excludeIds={participantIds} onAdd={(id) => onToggleSignUp(event.id, id, true)} />
       <div className="wsc-scroll wsc-modal-flex-scroll" style={{ overflowX: "auto" }}>
-        <table className="wsc-table" style={{ minWidth: 560 }}>
+        <table className="wsc-table" style={{ minWidth: 600 }}>
           <thead><tr>
-            {isStrategy && <th>Rank</th>}
             <th>Member</th>
-            {isStrategy ? <><th>Attended</th><th>Full duration?</th><th>Strategy</th></> : <th>Participated</th>}
-            {!isStrategy && <th>Score</th>}
+            <th>{isBattle ? "Attended" : "Participated"}</th>
+            <th>Duration</th>
+            {!isBattle && <th>Score</th>}
             <th>Notes</th>
             <th></th>
           </tr></thead>
           <tbody>
             {addedMembers.length === 0 ? (
-              <tr><td colSpan={8} style={{ padding: 20 }}><EmptyState title="No one added yet" body="Search above to add members who are taking part in this event." /></td></tr>
+              <tr><td colSpan={7} style={{ padding: 20 }}><EmptyState title="No one added yet" body="Search above to add members who are taking part in this event." /></td></tr>
             ) : addedMembers.map((m) => {
               const p = partMap[m.id];
+              const isSub = hasRoles && p?.role === "sub";
               const noShow = !p?.attended;
-              const showRank = isStrategy && p?.attended;
-              if (showRank) rankCounter += 1;
+              const accent = isBattle ? "var(--success)" : "var(--frost)";
               return (
                 <tr key={m.id}>
-                  {isStrategy && <td style={{ fontFamily: "var(--font-mono)", color: showRank ? "var(--frost)" : "var(--steel-dim)" }}>{showRank ? `#${rankCounter}` : "—"}</td>}
-                  <td>{m.name}{isStrategy && noShow && <span className="wsc-pill" style={{ background: "#E2604F22", color: "var(--danger)", marginLeft: 8 }}>No-show</span>}</td>
-                  {isStrategy ? (
-                    <>
-                      <td><button className="wsc-btn wsc-btn-icon" style={{ background: p?.attended ? "#5FBF8C22" : "transparent", borderColor: p?.attended ? "var(--success)" : "var(--border)" }}
-                        onClick={() => onToggleAttend(event.id, m.id, !p?.attended)} aria-label="Toggle attended"><Check size={13} color={p?.attended ? "var(--success)" : "var(--steel-dim)"} /></button></td>
-                      <td>
-                        {p?.attended ? (
-                          <select className="wsc-select" style={{ width: 130, color: p?.durationStatus && p.durationStatus !== "full" ? "var(--amber)" : "var(--success)" }}
-                            value={p?.durationStatus || "full"} onChange={(e) => onSetDuration(event.id, m.id, e.target.value)}>
-                            <option value="full">Full</option>
-                            <option value="left_early">Left early</option>
-                            <option value="late">Arrived late</option>
-                            <option value="vanished">Vanished mid-event</option>
-                          </select>
-                        ) : <span style={{ color: "var(--steel-dim)" }}>—</span>}
-                      </td>
-                      <td>
-                        <select className="wsc-select" style={{ width: 150 }} value={p?.strategy || ""} onChange={(e) => onSetStrategy(event.id, m.id, e.target.value)}>
-                          <option value="">Not set</option>
-                          <option value="followed">{STRATEGY_LABELS.followed}</option>
-                          <option value="partial">{STRATEGY_LABELS.partial}</option>
-                          <option value="none">{STRATEGY_LABELS.none}</option>
-                        </select>
-                      </td>
-                    </>
-                  ) : (
-                    <td>
-                      <button className="wsc-btn wsc-btn-icon" style={{ background: p?.attended ? "#6FCBEA22" : "transparent", borderColor: p?.attended ? "var(--frost)" : "var(--border)" }}
-                        onClick={() => onToggleAttend(event.id, m.id, !p?.attended)} aria-label="Toggle participated"><Check size={13} color={p?.attended ? "var(--frost)" : "var(--steel-dim)"} /></button>
-                    </td>
-                  )}
-                  {!isStrategy && <td><input className="wsc-input" style={{ width: 90 }} type="number" placeholder="—" defaultValue={p?.score ?? ""} onBlur={(e) => onScore(event.id, m.id, e.target.value)} /></td>}
+                  <td>{m.name}
+                    {hasRoles && <RolePill role={isSub ? "sub" : "joiner"} onToggle={() => onSetRole(event.id, m.id, isSub ? "joiner" : "sub")} />}
+                    {isBattle && noShow && <span className="wsc-pill" style={{ background: "#E2604F22", color: "var(--danger)", marginLeft: 8 }}>{isSub ? "Not online" : "No-show"}</span>}
+                  </td>
+                  <td><button className="wsc-btn wsc-btn-icon" style={{ background: p?.attended ? `${isBattle ? "#5FBF8C" : "#6FCBEA"}22` : "transparent", borderColor: p?.attended ? accent : "var(--border)" }}
+                    onClick={() => onToggleAttend(event.id, m.id, !p?.attended)} aria-label={isBattle ? "Toggle attended" : "Toggle participated"}><Check size={13} color={p?.attended ? accent : "var(--steel-dim)"} /></button></td>
+                  <td>
+                    {p?.attended && !isSub ? (
+                      <select className="wsc-select" style={{ width: 170, color: p?.durationStatus && p.durationStatus !== "full" ? "var(--amber)" : "var(--success)" }}
+                        value={p?.durationStatus || "full"} onChange={(e) => onSetDuration(event.id, m.id, e.target.value)}>
+                        {Object.entries(DURATION_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
+                      </select>
+                    ) : <span style={{ color: "var(--steel-dim)" }}>—</span>}
+                  </td>
+                  {!isBattle && <td><input className="wsc-input" style={{ width: 90 }} type="number" placeholder="—" defaultValue={p?.score ?? ""} onBlur={(e) => onScore(event.id, m.id, e.target.value)} /></td>}
                   <td><input className="wsc-input" style={{ width: 150 }} placeholder="e.g. left after 20 min" defaultValue={p?.note ?? ""} onBlur={(e) => onNote(event.id, m.id, e.target.value)} /></td>
                   <td><button className="wsc-btn wsc-btn-icon" onClick={() => onToggleSignUp(event.id, m.id, false)} aria-label="Remove from event" title="Remove from event"><X size={12} color="var(--steel-dim)" /></button></td>
                 </tr>
@@ -1311,12 +1345,12 @@ function EventsTab({ events, members, participation, onOpenEvent }) {
         {sorted.length === 0 ? <EmptyState title="No events logged" body='Use "Add event" up top to create an occurrence for any event type.' /> : (
           <div style={{ overflowX: "auto" }}>
             <table className="wsc-table">
-              <thead><tr><th>Date</th><th>Type</th><th>Session</th><th>Signed up</th><th>Attended</th><th>Left early</th><th>No-shows</th><th>Turnout</th></tr></thead>
+              <thead><tr><th>Date</th><th>Type</th><th>Session</th><th>Signed up</th><th>Attended</th><th>Partial</th><th>No-shows</th><th>Show-up rate</th></tr></thead>
               <tbody>
                 {sorted.map((ev) => {
                   const rows = participation.filter((p) => p.eventId === ev.id);
                   const signed = rows.filter((p) => p.signedUp).length, attended = rows.filter((p) => p.attended).length;
-                  const partial = rows.filter((p) => p.attended && p.durationStatus === "left_early").length;
+                  const partial = rows.filter((p) => p.attended && p.durationStatus && p.durationStatus !== "full" && !(usesRoles(ev.type) && p.role === "sub")).length;
                   const noShows = rows.filter((p) => p.signedUp && !p.attended).length;
                   const rate = signed > 0 ? Math.round((attended / signed) * 100) : 0;
                   return (
@@ -1779,6 +1813,7 @@ export default function App() {
     // not on every background token refresh (e.g. from switching browser tabs).
   }, [userId]);
 
+  const reliability = useMemo(() => computeReliability(participation, events, todayStr()), [participation, events]);
   const lastActivityByMember = useMemo(() => {
     const map = {};
     members.forEach((m) => { map[m.id] = null; });
@@ -2024,7 +2059,7 @@ export default function App() {
 
   const upsertParticipation = useCallback(async (eventId, memberId, patch) => {
     const existing = participation.find((p) => p.eventId === eventId && p.memberId === memberId);
-    const merged = existing ? { ...existing, ...patch } : { eventId, memberId, signedUp: false, attended: false, durationStatus: "full", score: "", note: "", ...patch };
+    const merged = existing ? { ...existing, ...patch } : { eventId, memberId, signedUp: false, attended: false, durationStatus: "full", role: "joiner", score: "", note: "", ...patch };
     const { data, error } = await supabase.from("participation").upsert(partToRow(merged), { onConflict: "event_id,member_id" }).select().single();
     const saved = !error && data ? rowToPart(data) : merged;
     setParticipation((prev) => existing ? prev.map((p) => p === existing ? saved : p) : [...prev, saved]);
@@ -2034,7 +2069,7 @@ export default function App() {
   const setDuration = useCallback((eventId, memberId, status) => upsertParticipation(eventId, memberId, { durationStatus: status }), [upsertParticipation]);
   const setScore = useCallback((eventId, memberId, score) => upsertParticipation(eventId, memberId, { score }), [upsertParticipation]);
   const setNote = useCallback((eventId, memberId, note) => upsertParticipation(eventId, memberId, { note }), [upsertParticipation]);
-  const setStrategy = useCallback((eventId, memberId, strategy) => upsertParticipation(eventId, memberId, { strategy }), [upsertParticipation]);
+  const setRole = useCallback((eventId, memberId, role) => upsertParticipation(eventId, memberId, { role }), [upsertParticipation]);
   const importFromPlan = useCallback(async (event, plan) => {
     const rosterIds = new Set(members.map((m) => m.id));
     const memberIds = [...new Set(Object.values(plan.seats || {}).flat().filter(Boolean))].filter((id) => rosterIds.has(id));
@@ -2062,13 +2097,14 @@ export default function App() {
       };
     });
     const wsGrowth = XLSX.utils.json_to_sheet(growthRows);
-    const wsEvents = XLSX.utils.json_to_sheet(events.map((e) => ({ Date: e.date, Type: e.type, Name: e.name, Session: e.session || "", Mode: e.mode === "strategy" ? "Strategy compliance" : "Score" })));
+    const wsEvents = XLSX.utils.json_to_sheet(events.map((e) => ({ Date: e.date, Type: e.type, Name: e.name, Session: e.session || "", Mode: e.mode === "strategy" ? "Battle Record" : "Score Record" })));
     const partRows = participation.map((p) => {
       const ev = events.find((e) => e.id === p.eventId), m = members.find((x) => x.id === p.memberId);
       return {
         Event: ev ? ev.name : p.eventId, Date: ev ? ev.date : "", Member: m ? m.name : p.memberId,
         "Signed up": p.signedUp ? "Yes" : "No", Attended: p.attended ? "Yes" : "No",
-        "Duration": p.attended ? ({ full: "Full", left_early: "Left early", late: "Arrived late", vanished: "Vanished mid-event" }[p.durationStatus || "full"]) : "",
+        Role: usesRoles(ev?.type) ? (p.role === "sub" ? "Sub" : "Joiner") : "",
+        "Duration": p.attended && !(usesRoles(ev?.type) && p.role === "sub") ? DURATION_LABELS[p.durationStatus || "full"] : "",
         Score: p.score, Strategy: p.strategy ? (STRATEGY_LABELS[p.strategy] || p.strategy) : "", Notes: p.note || "",
       };
     });
@@ -2089,14 +2125,13 @@ export default function App() {
     activeMembers.forEach((m) => { splitRoles(m.customRole).forEach((r) => { roleCounts[r] = (roleCounts[r] || 0) + 1; }); });
     const roleRows = Object.entries(roleCounts).sort((a, b) => b[1] - a[1]);
 
-    const attendCounts = {}, noShowCounts = {};
-    participation.forEach((p) => {
-      if (p.attended) attendCounts[p.memberId] = (attendCounts[p.memberId] || 0) + 1;
-      if (p.signedUp && !p.attended) noShowCounts[p.memberId] = (noShowCounts[p.memberId] || 0) + 1;
-    });
+    const rel = computeReliability(participation, events, todayStr());
     const nameOf = (id) => members.find((m) => m.id === id)?.name || id;
-    const topAttendees = Object.entries(attendCounts).map(([id, n]) => ({ name: nameOf(id), n })).sort((a, b) => b.n - a.n).slice(0, 10);
-    const frequentNoShows = Object.entries(noShowCounts).map(([id, n]) => ({ name: nameOf(id), n })).filter((r) => r.n >= 2).sort((a, b) => b.n - a.n).slice(0, 10);
+    const topAttendees = Object.entries(rel).map(([id, r]) => ({ name: nameOf(id), n: r.attended })).filter((r) => r.n > 0).sort((a, b) => b.n - a.n).slice(0, 10);
+    const trendWord = { worsening: "Worsening", improving: "Improving", steady: "Steady" };
+    const flaggedRows = Object.entries(rel).filter(([id, r]) => r.flagged && activeMembers.some((m) => m.id === id))
+      .sort((a, b) => b[1].recent.rate - a[1].recent.rate)
+      .map(([id, r]) => [nameOf(id), breakdownParts(r.recent).join(" · "), `${Math.round(r.recent.rate * 100)}%`, `${Math.round(r.all.rate * 100)}%`, r.trendVisible ? trendWord[r.trend] : "—"]);
 
     const bucketOf = (cls) => {
       if (!cls) return "Not set";
@@ -2118,12 +2153,12 @@ export default function App() {
       return row;
     });
 
-    const recentEvents = [...events].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10).map((ev) => {
+    const recentEvents = [...events].filter((e) => e.date <= todayStr()).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10).map((ev) => {
       const rows = participation.filter((p) => p.eventId === ev.id);
       const signed = rows.filter((p) => p.signedUp).length;
       const attended = rows.filter((p) => p.attended).length;
       const rate = signed > 0 ? Math.round((attended / signed) * 100) : 0;
-      return { Date: ev.date, Event: ev.name + (ev.session ? ` (${ev.session})` : ""), "Signed up": signed, Attended: attended, "Turnout %": rate };
+      return { Date: ev.date, Event: ev.name + (ev.session ? ` (${ev.session})` : ""), "Signed up": signed, Attended: attended, "Show-up rate %": rate };
     });
 
     const aoa = [
@@ -2141,19 +2176,20 @@ export default function App() {
       ["Most reliable attendees (events attended)"],
       ...(topAttendees.length ? topAttendees.map((r) => [r.name, r.n]) : [["No attendance logged yet"]]),
       [],
-      ["Frequent no-shows (signed up, didn't attend, 2+ times)"],
-      ...(frequentNoShows.length ? frequentNoShows.map((r) => [r.name, r.n]) : [["No repeat no-shows"]]),
+      ["Unreliable Attendance (flagged: 2+ incidents and 50%+ of points lost over the last 5 sign-ups)"],
+      ["Member", "Breakdown (recent)", "Recent rate", "All-time rate", "Trend"],
+      ...(flaggedRows.length ? flaggedRows : [["No members currently flagged"]]),
       [],
       ["Troop tier spread (active roster)"],
       ["Bucket", "Infantry", "Marksman", "Lancer"],
       ...tierRows.map((r) => [r.Bucket, r.Infantry, r.Marksman, r.Lancer]),
       [],
-      ["Recent event turnout"],
-      ["Date", "Event", "Signed up", "Attended", "Turnout %"],
-      ...(recentEvents.length ? recentEvents.map((r) => [r.Date, r.Event, r["Signed up"], r.Attended, r["Turnout %"]]) : [["No events logged yet"]]),
+      ["Recent event show-up rate"],
+      ["Date", "Event", "Signed up", "Attended", "Show-up rate %"],
+      ...(recentEvents.length ? recentEvents.map((r) => [r.Date, r.Event, r["Signed up"], r.Attended, r["Show-up rate %"]]) : [["No events logged yet"]]),
     ];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [{ wch: 30 }, { wch: 20 }, { wch: 14 }, { wch: 12 }, { wch: 12 }];
+    ws["!cols"] = [{ wch: 30 }, { wch: 34 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Summary");
     XLSX.writeFile(wb, `${(config.allianceName || "alliance").replace(/[^a-z0-9]+/gi, "-")}-summary.xlsx`);
@@ -2250,10 +2286,10 @@ export default function App() {
           </div>
         </div>
         <div className="wsc-body wsc-scroll">
-          {tab === "dashboard" && <Dashboard members={members} growth={growth} events={events} participation={participation} config={config} />}
+          {tab === "dashboard" && <Dashboard members={members} growth={growth} events={events} participation={participation} config={config} reliability={reliability} />}
           {tab === "roster" && <RosterTab members={members} growth={growth} lastActivityByMember={lastActivityByMember} rankLabels={config.rankLabels} onEdit={(m) => setMemberModal(m)} onBulkLeave={bulkMarkLeft} />}
           {tab === "leavers" && <LeaversTab members={members} retentionDays={config.leaverRetentionDays ?? 90} rankLabels={config.rankLabels} onReactivate={reactivateMember} onPurgeNow={deleteMember} onEdit={(m) => setMemberModal(m)} />}
-          {tab === "growth" && <GrowthTab members={roster} growth={growth} participation={participation} onEditMember={openGrowthFor} />}
+          {tab === "growth" && <GrowthTab members={roster} growth={growth} reliability={reliability} onEditMember={openGrowthFor} />}
           {tab === "events" && <EventsTab events={events} members={members} participation={participation} onOpenEvent={(ev) => setOpenEvent(ev)} />}
           {tab === "assignments" && <AssignmentsTab
             canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} customAssignments={customAssignments}
@@ -2269,7 +2305,7 @@ export default function App() {
       {(showAddMember || memberModal) && <MemberModal member={memberModal} onClose={() => { setShowAddMember(false); setMemberModal(null); }} onSave={saveMember} onDelete={deleteMember} />}
       {showLogGrowth && <LogGrowthModal members={roster} profiles={growth} initialMemberId={growthPreset} onClose={() => { setShowLogGrowth(false); setGrowthPreset(null); }} onSave={saveGrowth} />}
       {showAddEvent && <EventModal onClose={() => setShowAddEvent(false)} onSave={addEvent} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} />}
-      {openEvent && <EventDetail event={openEvent} members={members} participation={participation} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} onClose={() => setOpenEvent(null)} onDelete={deleteEvent} onToggleSignUp={toggleSignUp} onToggleAttend={toggleAttend} onSetDuration={setDuration} onScore={setScore} onNote={setNote} onSetStrategy={setStrategy} onImportFromPlan={importFromPlan} />}
+      {openEvent && <EventDetail event={openEvent} members={members} participation={participation} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} onClose={() => setOpenEvent(null)} onDelete={deleteEvent} onToggleSignUp={toggleSignUp} onToggleAttend={toggleAttend} onSetDuration={setDuration} onScore={setScore} onNote={setNote} onSetRole={setRole} onImportFromPlan={importFromPlan} />}
     </div>
   );
 }
