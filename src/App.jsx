@@ -674,11 +674,17 @@ function T12SkillCard({ members, growth }) {
 function Dashboard({ members, growth, events, participation, config, reliability }) {
   const activeMembers = members.filter((m) => m.status !== "left");
   const leaverCount = members.length - activeMembers.length;
+  const [view, setView] = useState("flagged");
   const today = todayStr();
   const unreliable = useMemo(() => activeMembers
     .map((m) => ({ member: m, r: reliability[m.id] }))
     .filter((x) => x.r && x.r.flagged)
     .sort((a, b) => b.r.recent.rate - a.r.recent.rate), [activeMembers, reliability]);
+  const everyone = useMemo(() => activeMembers
+    .map((m) => ({ member: m, r: reliability[m.id] }))
+    .filter((x) => x.r)
+    .sort((a, b) => b.r.recent.rate - a.r.recent.rate || b.r.all.rate - a.r.all.rate || a.member.name.localeCompare(b.member.name)), [activeMembers, reliability]);
+  const rows = view === "flagged" ? unreliable : everyone;
   const activeCount = activeMembers.length;
   const signedByEvent = useMemo(() => { const m = {}; participation.forEach((p) => { if (p.signedUp) m[p.eventId] = (m[p.eventId] || 0) + 1; }); return m; }, [participation]);
   const latestEvent = [...events].filter((e) => e.date <= today && signedByEvent[e.id] > 0)
@@ -735,23 +741,38 @@ function Dashboard({ members, growth, events, participation, config, reliability
       </div>
       <div style={{ marginTop: 14 }}><T12SkillCard members={activeMembers} growth={growth} /></div>
       <div className="wsc-card" style={{ marginTop: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
           <LogOut size={15} color="var(--amber)" /><div className="wsc-stat-label" style={{ margin: 0 }}>Unreliable Attendance</div>
-          {unreliable.length > 0 && <span style={{ fontSize: 11.5, color: "var(--steel-dim)" }}>{unreliable.length} flagged</span>}
+          <span style={{ fontSize: 11.5, color: "var(--steel-dim)" }}>
+            {view === "flagged" ? (unreliable.length > 0 ? `${unreliable.length} flagged` : "") : `${everyone.length} of ${activeMembers.length} members have sign-ups`}
+          </span>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            {[["flagged", "Flagged only"], ["all", "Everyone"]].map(([key, label]) => (
+              <button key={key} type="button" className="wsc-btn wsc-btn-sm" onClick={() => setView(key)}
+                style={{ background: view === key ? "var(--frost)" : "var(--panel-2)", color: view === key ? "#08202C" : "var(--white)", borderColor: view === key ? "var(--frost)" : "var(--border)" }}>{label}</button>
+            ))}
+          </div>
         </div>
-        {unreliable.length === 0 ? <EmptyState title="No liability concerns" body="Members with 2+ incidents (no-show, late, offline in between or left early) making up half or more of their last 5 sign-ups will show here, with their most recent note. Older incidents roll off on their own as new sign-ups come in." /> : (
+        {rows.length === 0 ? (
+          view === "flagged"
+            ? <EmptyState title="No liability concerns" body="Members with 2+ incidents (no-show, late, offline in between or left early) making up half or more of their last 5 sign-ups will show here, with their most recent note. Older incidents roll off on their own as new sign-ups come in." />
+            : <EmptyState title="No sign-ups yet" body="Once members sign up for events, their recent and all-time rates will show here." />
+        ) : (
           <div style={{ maxHeight: 380, overflowY: "auto" }}>
             <table className="wsc-table"><thead><tr><th>Member</th><th>Breakdown</th><th title="Last 5 sign-ups">Recent</th><th title="All sign-ups">All-time</th><th title="Recent rate vs all-time rate">Trend</th><th>Last note</th></tr></thead>
-              <tbody>{unreliable.map(({ member, r }) => (
-                <tr key={member.id}>
-                  <td>{member.name}</td>
-                  <td style={{ color: "var(--danger)" }}>{breakdownParts(r.recent).join(" · ")}</td>
-                  <td style={{ color: "var(--steel)", fontFamily: "var(--font-mono)" }}>{Math.round(r.recent.rate * 100)}%</td>
-                  <td style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)" }}>{Math.round(r.all.rate * 100)}%</td>
-                  <td style={{ whiteSpace: "nowrap" }}>{r.trendVisible ? <TrendMark trend={r.trend} withLabel /> : <span style={{ color: "var(--steel-dim)" }}>—</span>}</td>
-                  <td style={{ color: "var(--steel-dim)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.recent.lastNote}>{r.recent.lastNote || "—"}</td>
-                </tr>
-              ))}</tbody></table>
+              <tbody>{rows.map(({ member, r }) => {
+                const parts = breakdownParts(r.recent);
+                return (
+                  <tr key={member.id}>
+                    <td>{member.name}{view === "all" && r.flagged && <span className="wsc-pill" style={{ background: "#E2604F22", color: "var(--danger)", marginLeft: 8 }}>Flagged</span>}</td>
+                    <td style={{ color: r.flagged ? "var(--danger)" : parts.length ? "var(--amber)" : "var(--steel-dim)" }}>{parts.length ? parts.join(" · ") : "—"}</td>
+                    <td style={{ color: "var(--steel)", fontFamily: "var(--font-mono)" }}>{Math.round(r.recent.rate * 100)}%</td>
+                    <td style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)" }}>{Math.round(r.all.rate * 100)}%</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{r.trendVisible ? <TrendMark trend={r.trend} withLabel /> : <span style={{ color: "var(--steel-dim)" }}>—</span>}</td>
+                    <td style={{ color: "var(--steel-dim)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.recent.lastNote}>{r.recent.lastNote || "—"}</td>
+                  </tr>
+                );
+              })}</tbody></table>
           </div>
         )}
       </div>
@@ -1075,22 +1096,28 @@ function GrowthTab({ members, growth, reliability, onEditMember }) {
       case "power": return g && g.power !== "" ? Number(g.power) : -1;
       case "attendance": return a ? a.attended / a.signedUp : -1;
       case "updated": return g?.updatedDate || "";
+      case "trend": return reliability[m.id]?.trendVisible ? reliability[m.id].recent.rate : -1;
       default: return m.name.toLowerCase();
     }
   };
   const sorted = [...filtered].sort((a, b) => {
+    if (sortKey === "trend") {
+      // members whose trend is still hidden (under 3 sign-ups) always sit at the bottom, either direction
+      const ha = !!reliability[a.id]?.trendVisible, hb = !!reliability[b.id]?.trendVisible;
+      if (ha !== hb) return ha ? -1 : 1;
+    }
     const va = sortValue(a), vb = sortValue(b);
     if (va < vb) return sortDir === "asc" ? -1 : 1;
     if (va > vb) return sortDir === "asc" ? 1 : -1;
-    return 0;
+    return sortKey === "trend" ? a.name.localeCompare(b.name) : 0;
   });
   const toggleSort = (key) => {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(key); setSortDir(key === "name" ? "asc" : "desc"); }
   };
-  const SortHeader = ({ sortKeyName, children }) => (
-    <th style={{ cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort(sortKeyName)}>
-      {children}{sortKey === sortKeyName && <span style={{ marginLeft: 4, fontSize: 10, color: "var(--frost)" }}>{sortDir === "asc" ? "▲" : "▼"}</span>}
+  const SortHeader = ({ sortKeyName, title, children }) => (
+    <th title={title} style={{ cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort(sortKeyName)}>
+      {children}{sortKey === sortKeyName && <span style={{ marginLeft: 4, fontSize: 10, color: "var(--frost)" }}>{sortDir === "asc" ? "↑" : "↓"}</span>}
     </th>
   );
   return (
@@ -1106,7 +1133,7 @@ function GrowthTab({ members, growth, reliability, onEditMember }) {
                   <SortHeader sortKeyName="name">Member</SortHeader>
                   <SortHeader sortKeyName="power">Power</SortHeader>
                   <SortHeader sortKeyName="attendance">Attendance</SortHeader>
-                  <th title="Unreliability trend: recent rate (last 5 sign-ups) vs all-time. Red ▲ = getting worse, green ▼ = improving. Shown from 3 sign-ups.">Trend</th>
+                  <SortHeader sortKeyName="trend" title="Unreliability trend: recent rate (last 5 sign-ups) vs all-time. Red ▲ = getting worse, green ▼ = improving. Shown from 3 sign-ups. Click to sort by recent rate.">Trend</SortHeader>
                   <th>Furnace</th>
                   <th style={{ textAlign: "center" }}>Troop tier</th>
                   <th style={{ textAlign: "center" }}>FC level</th>
