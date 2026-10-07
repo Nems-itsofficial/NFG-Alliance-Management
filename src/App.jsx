@@ -195,13 +195,205 @@ function MemberTrend({ id }) {
   );
 }
 
+// ---------- Tracker import: paste the tracker's Members page text ----------
+// Row shape: "#01 name · 1.38B · 1.56% · F80 · R3 · 💎 2,223 (#7)". Only name, power, alliance rank and labyrinth score are used.
+const TRACKER_BIG_CHANGE = 0.35; // flag a power change larger than this vs the stored value
+const normName = (s) => (s || "").normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+function editDistance(a, b) {
+  if (a === b) return 0;
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
+}
+function nameSimilarity(a, b) {
+  if (!a || !b) return 0;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  const sim = 1 - editDistance(a, b) / long.length;
+  if (short.length >= 4 && (long.startsWith(short) || long.endsWith(short))) return Math.max(0.9, sim); // "Wingedbeast^NL" vs "Wingedbeast"
+  return sim;
+}
+function parseTrackerText(text) {
+  const src = (text || "").replace(/ /g, " ");
+  const starts = [];
+  const boundary = /(?:^|\s)#(\d{1,3})(?!\d)/g; // "(#7)" state ranks are preceded by "(" so they never match
+  let b;
+  while ((b = boundary.exec(src))) starts.push({ pos: parseInt(b[1], 10), from: b.index + b[0].length, at: b.index });
+  const rows = []; let unreadable = 0;
+  starts.forEach((st, i) => {
+    const chunk = src.slice(st.from, i + 1 < starts.length ? starts[i + 1].at : src.length);
+    const power = /(\d[\d,]*(?:\.\d+)?)\s*([KMB])\b\s*[·•|\-–—]?\s*(\d+(?:\.\d+)?)\s*%/gi;
+    let last = null, m;
+    while ((m = power.exec(chunk))) last = m;
+    if (!last) { if (chunk.trim()) unreadable++; return; }
+    const name = chunk.slice(0, last.index).replace(/[\s·•|\-–—]+$/, "").replace(/^[\s·•|\-–—]+/, "").replace(/\s*\n\s*/g, " ").trim();
+    if (!name) { unreadable++; return; }
+    const tail = chunk.slice(last.index + last[0].length);
+    const rk = tail.match(/\bR([1-5])\b/);
+    const after = rk ? tail.slice(rk.index + rk[0].length) : tail;
+    const sc = after.match(/(\d{1,3}(?:,\d{3})+|\d{3,6})/);
+    const unit = { K: 1e3, M: 1e6, B: 1e9 }[last[2].toUpperCase()];
+    rows.push({
+      pos: st.pos, name,
+      power: Math.round(parseFloat(last[1].replace(/,/g, "")) * unit),
+      share: parseFloat(last[3]),
+      rank: rk ? `R${rk[1]}` : null,
+      score: sc ? parseInt(sc[1].replace(/,/g, ""), 10) : null,
+    });
+  });
+  return { rows, unreadable };
+}
+// Matches parsed rows to roster members: exact (name or saved alias) -> automatic; close -> "check" (not ticked); otherwise needs a pick.
+function matchTrackerRows(rows, roster) {
+  const byKey = new Map();
+  const add = (key, m) => { if (!key) return; const arr = byKey.get(key) || []; if (!arr.includes(m)) arr.push(m); byKey.set(key, arr); };
+  roster.forEach((m) => { add(normName(m.name), m); (m.aliases || []).forEach((a) => add(normName(a), m)); });
+  const claimed = new Set(), seen = new Set();
+  let duplicates = 0;
+  const out = [];
+  rows.forEach((r) => {
+    const key = normName(r.name);
+    if (key && seen.has(key)) { duplicates++; return; }
+    if (key) seen.add(key);
+    const base = { ...r, key, status: "unmatched", choice: "", include: false };
+    const list = key ? byKey.get(key) : null;
+    if (list && list.length === 1 && !claimed.has(list[0].id)) { claimed.add(list[0].id); out.push({ ...base, status: "exact", choice: list[0].id, auto: list[0].id, include: true }); }
+    else out.push(base);
+  });
+  out.forEach((r, i) => {
+    if (r.status !== "unmatched" || !r.key) return;
+    let best = null, second = 0;
+    roster.forEach((m) => {
+      if (claimed.has(m.id)) return;
+      const keys = [normName(m.name), ...(m.aliases || []).map(normName)].filter(Boolean);
+      if (!keys.length) return;
+      const sc = Math.max(...keys.map((k) => nameSimilarity(r.key, k)));
+      if (!best || sc > best.sc) { if (best) second = Math.max(second, best.sc); best = { m, sc }; } else second = Math.max(second, sc);
+    });
+    if (best && best.sc >= 0.82 && best.sc - second >= 0.05) { claimed.add(best.m.id); out[i] = { ...r, status: "check", choice: best.m.id, auto: best.m.id, include: false }; }
+  });
+  return { rows: out, duplicates };
+}
+// Turns the reviewed rows into the exact writes to make.
+function planTrackerImport(rows, members, growth, today) {
+  const memberById = {}; members.forEach((m) => { memberById[m.id] = m; });
+  const growthById = {}; growth.forEach((g) => { growthById[g.memberId] = g; });
+  const plan = { growth: [], memberUpdates: [], newMembers: [], conflicts: 0, rankChanges: 0, aliasAdds: 0 };
+  const used = new Set();
+  rows.forEach((r) => {
+    if (!r.include || !r.choice || r.choice === "__skip") return;
+    if (r.choice === "__new") { plan.newMembers.push({ name: r.name, rank: r.rank || "R1", power: r.power, score: r.score }); return; }
+    const m = memberById[r.choice];
+    if (!m) return;
+    if (used.has(m.id)) { plan.conflicts++; return; }
+    used.add(m.id);
+    const g = growthById[m.id];
+    const old = g && g.power !== "" && g.power != null ? Number(g.power) : null;
+    plan.growth.push({
+      memberId: m.id, power: r.power,
+      previousPower: old != null && old !== r.power ? old : (g ? g.previousPower : ""),
+      labyrinthScore: r.score != null ? r.score : (g ? g.labyrinthScore : ""),
+      updatedDate: today,
+    });
+    const patch = {};
+    if (r.rank && r.rank !== m.rank) { patch.rank = r.rank; plan.rankChanges++; }
+    const nn = normName(r.name);
+    if (nn && nn !== normName(m.name) && !(m.aliases || []).some((a) => normName(a) === nn)) { patch.aliases = [...(m.aliases || []), r.name]; plan.aliasAdds++; }
+    if (Object.keys(patch).length) plan.memberUpdates.push({ id: m.id, ...patch });
+  });
+  return plan;
+}
+const growthPayload = (g) => ({ ...growthToRow(g), labyrinth_score: g.labyrinthScore === "" || g.labyrinthScore == null ? null : g.labyrinthScore });
+// Executes a plan against Supabase. Takes the client as a parameter so it can be tested with a stand-in.
+async function runTrackerImport(sb, plan, { members, growth, today }) {
+  const memberById = {}; members.forEach((m) => { memberById[m.id] = m; });
+  const growthById = {}; growth.forEach((g) => { growthById[g.memberId] = g; });
+  const snapshot = { growthBefore: [], memberBefore: [], newMemberIds: [] };
+  const out = { newMembers: [], growthRows: [], memberPatches: {} };
+  const merged = [];
+  for (const nm of plan.newMembers) {
+    const { data, error } = await sb.from("members").insert(memberToRow({ name: nm.name, gameId: "", rank: nm.rank, status: "active", customRole: "", joinDate: today, leftDate: "", notes: "" })).select().single();
+    if (error || !data) throw new Error(`Couldn't add "${nm.name}": ${error?.message || "unknown error"}`);
+    snapshot.newMemberIds.push(data.id); out.newMembers.push(rowToMember(data));
+    merged.push({ memberId: data.id, furnaceLevel: "", classes: {}, power: nm.power, previousPower: "", labyrinthScore: nm.score ?? "", updatedDate: today });
+  }
+  for (const e of plan.growth) {
+    const base = growthById[e.memberId] || { memberId: e.memberId, furnaceLevel: "", classes: {} };
+    snapshot.growthBefore.push({ memberId: e.memberId, before: growthById[e.memberId] || null });
+    merged.push({ ...base, power: e.power, previousPower: e.previousPower, labyrinthScore: e.labyrinthScore, updatedDate: e.updatedDate });
+  }
+  for (let i = 0; i < merged.length; i += 50) {
+    const { data, error } = await sb.from("growth").upsert(merged.slice(i, i + 50).map(growthPayload), { onConflict: "member_id" }).select();
+    if (error) throw new Error(`Couldn't save player data: ${error.message}`);
+    (data || []).forEach((r) => out.growthRows.push(rowToGrowth(r)));
+  }
+  for (const u of plan.memberUpdates) {
+    const { id, ...patch } = u;
+    const m = memberById[id];
+    snapshot.memberBefore.push({ id, rank: m.rank, aliases: m.aliases || [] });
+    const { error } = await sb.from("members").update(patch).eq("id", id);
+    if (error) throw new Error(`Couldn't update ${m.name}: ${error.message}`);
+    out.memberPatches[id] = patch;
+  }
+  return { out, snapshot };
+}
+async function runTrackerUndo(sb, snapshot) {
+  const res = { removedMemberIds: [], restoredGrowth: [], clearedGrowthFor: [], memberPatches: {} };
+  for (const id of snapshot.newMemberIds) {
+    const { error } = await sb.from("members").delete().eq("id", id); // cascades to their growth row
+    if (error) throw new Error(`Couldn't undo: ${error.message}`);
+    res.removedMemberIds.push(id);
+  }
+  const fresh = new Set(snapshot.newMemberIds);
+  for (const { memberId, before } of snapshot.growthBefore) {
+    if (fresh.has(memberId)) continue;
+    if (before) {
+      const { data, error } = await sb.from("growth").upsert(growthPayload(before), { onConflict: "member_id" }).select().single();
+      if (error) throw new Error(`Couldn't undo: ${error.message}`);
+      res.restoredGrowth.push(data ? rowToGrowth(data) : before);
+    } else {
+      const { error } = await sb.from("growth").delete().eq("member_id", memberId);
+      if (error) throw new Error(`Couldn't undo: ${error.message}`);
+      res.clearedGrowthFor.push(memberId);
+    }
+  }
+  for (const b of snapshot.memberBefore) {
+    const patch = { rank: b.rank, aliases: b.aliases };
+    const { error } = await sb.from("members").update(patch).eq("id", b.id);
+    if (error) throw new Error(`Couldn't undo: ${error.message}`);
+    res.memberPatches[b.id] = patch;
+  }
+  return res;
+}
+// Labyrinth rank (#1, #2, ...) is worked out from the stored scores of current members; ties share a rank.
+function computeLabyrinthRanks(growth, members) {
+  const active = new Set(members.filter((m) => m.status !== "left").map((m) => m.id));
+  const rows = growth.filter((g) => active.has(g.memberId) && g.labyrinthScore !== "" && g.labyrinthScore != null)
+    .map((g) => ({ id: g.memberId, score: Number(g.labyrinthScore) })).sort((a, b) => b.score - a.score);
+  const out = {};
+  rows.forEach((r, i) => { out[r.id] = { score: r.score, rank: i > 0 && rows[i - 1].score === r.score ? out[rows[i - 1].id].rank : i + 1 }; });
+  return out;
+}
+const LabyrinthContext = createContext({});
+function LabyrinthTag({ id }) {
+  const l = useContext(LabyrinthContext)[id];
+  if (!l) return null;
+  return <span title={`Labyrinth rank #${l.rank} in the alliance (score ${fmtNum(l.score)})`} style={{ fontSize: 12, marginRight: 8, color: "var(--frost)", fontFamily: "var(--font-mono)", fontWeight: 600 }}>#{l.rank}</span>;
+}
+
 const SKILL_LABELS = ["No skill", "1st skill", "2nd skill", "3rd skill"];
 
 // ---------------------------------------------------------------- data layer (Supabase)
-const rowToMember = (r) => ({ id: r.id, name: r.name, gameId: r.game_id || "", rank: r.rank, status: r.status, customRole: r.custom_role || "", joinDate: r.join_date || "", leftDate: r.left_date || "", notes: r.notes || "" });
-const memberToRow = (m) => ({ name: m.name, game_id: m.gameId || "", rank: m.rank, status: m.status, custom_role: m.customRole || "", join_date: m.joinDate || null, left_date: m.leftDate || null, notes: m.notes || "" });
-const rowToGrowth = (r) => ({ memberId: r.member_id, power: r.power ?? "", previousPower: r.previous_power ?? "", furnaceLevel: r.furnace_level || "", classes: r.classes || {}, updatedDate: r.updated_date || "" });
-const growthToRow = (g) => ({ member_id: g.memberId, power: g.power === "" ? null : g.power, previous_power: g.previousPower === "" ? null : g.previousPower, furnace_level: g.furnaceLevel || "", classes: g.classes || {}, updated_date: g.updatedDate || null });
+const rowToMember = (r) => ({ id: r.id, name: r.name, gameId: r.game_id || "", rank: r.rank, status: r.status, customRole: r.custom_role || "", joinDate: r.join_date || "", leftDate: r.left_date || "", notes: r.notes || "", aliases: Array.isArray(r.aliases) ? r.aliases : [] });
+// aliases is only written when there are some, so everything keeps working before the aliases column exists
+const memberToRow = (m) => ({ name: m.name, game_id: m.gameId || "", rank: m.rank, status: m.status, custom_role: m.customRole || "", join_date: m.joinDate || null, left_date: m.leftDate || null, notes: m.notes || "", ...(m.aliases && m.aliases.length ? { aliases: m.aliases } : {}) });
+const rowToGrowth = (r) => ({ memberId: r.member_id, power: r.power ?? "", previousPower: r.previous_power ?? "", furnaceLevel: r.furnace_level || "", classes: r.classes || {}, updatedDate: r.updated_date || "", labyrinthScore: r.labyrinth_score ?? "" });
+const growthToRow = (g) => ({ member_id: g.memberId, power: g.power === "" ? null : g.power, previous_power: g.previousPower === "" ? null : g.previousPower, furnace_level: g.furnaceLevel || "", classes: g.classes || {}, updated_date: g.updatedDate || null, ...(g.labyrinthScore !== "" && g.labyrinthScore != null ? { labyrinth_score: g.labyrinthScore } : {}) });
 const rowToEvent = (r) => ({ id: r.id, date: r.date, type: r.type, name: r.name, session: r.session || "", mode: r.mode || "score", linkedType: r.linked_type || "", linkedId: r.linked_id || "" });
 const eventToRow = (e) => ({ date: e.date, type: e.type, name: e.name, session: e.session || "", mode: e.mode || "score", linked_type: e.linkedType || null, linked_id: e.linkedId || null });
 const rowToPart = (r) => ({ id: r.id, eventId: r.event_id, memberId: r.member_id, signedUp: !!r.signed_up, attended: !!r.attended, durationStatus: r.duration_status || "full", role: r.role || "joiner", score: r.score ?? "", note: r.note || "", strategy: r.strategy || "" });
@@ -1114,7 +1306,162 @@ function MergedClassCell({ classes, mode }) {
     </span>
   );
 }
+function TrackerImportModal({ members, growth, onApply, onUndo, onExportBackup, onClose }) {
+  const roster = useMemo(() => members.filter((m) => m.status !== "left"), [members]);
+  const sortedRoster = useMemo(() => [...roster].sort((a, b) => a.name.localeCompare(b.name)), [roster]);
+  const memberById = useMemo(() => { const o = {}; members.forEach((m) => { o[m.id] = m; }); return o; }, [members]);
+  const growthById = useMemo(() => { const o = {}; growth.forEach((g) => { o[g.memberId] = g; }); return o; }, [growth]);
+  const [text, setText] = useState("");
+  const [rows, setRows] = useState(null);
+  const [dupes, setDupes] = useState(0);
+  const [onlyAttention, setOnlyAttention] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const parsed = useMemo(() => parseTrackerText(text), [text]);
+  const review = () => { const m = matchTrackerRows(parsed.rows, roster); setRows(m.rows); setDupes(m.duplicates); };
+  const update = (i, patch) => setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  const choose = (i, choice) => update(i, { choice, include: choice !== "" && choice !== "__skip" });
+  const plan = useMemo(() => (rows ? planTrackerImport(rows, members, growth, todayStr()) : null), [rows, members, growth]);
+  const chosen = useMemo(() => new Set((rows || []).map((r) => r.choice).filter((c) => c && c[0] !== "_")), [rows]);
+  const needsAttention = (r) => r.choice === "" || r.status === "check" || (r.choice && r.choice[0] !== "_" && memberById[r.choice] && growthById[r.choice]?.power !== "" && growthById[r.choice]?.power != null && Math.abs(r.power - Number(growthById[r.choice].power)) / Number(growthById[r.choice].power) > TRACKER_BIG_CHANGE);
+  const apply = async () => {
+    setBusy(true);
+    const res = await onApply(plan);
+    setBusy(false);
+    setResult(res);
+  };
+  const undo = async () => {
+    setBusy(true);
+    const res = await onUndo(result.snapshot);
+    setBusy(false);
+    setResult(res.ok ? { ok: true, undone: true } : res);
+  };
+
+  if (result) {
+    return (
+      <Modal title="Import from tracker" onClose={onClose} wide>
+        {result.ok ? (
+          <div className="wsc-card" style={{ marginBottom: 14 }}>
+            {result.undone ? <div style={{ fontWeight: 600 }}>Import undone. Everything is back as it was.</div> : (
+              <>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Import applied</div>
+                <div style={{ fontSize: 13, color: "var(--steel)" }}>
+                  {result.summary.updated} player{result.summary.updated !== 1 ? "s" : ""} updated · {result.summary.added} new member{result.summary.added !== 1 ? "s" : ""} · {result.summary.rankChanges} rank change{result.summary.rankChanges !== 1 ? "s" : ""}{result.summary.aliasAdds > 0 ? ` · ${result.summary.aliasAdds} name${result.summary.aliasAdds !== 1 ? "s" : ""} remembered` : ""}
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="wsc-card" style={{ marginBottom: 14, borderColor: "var(--danger)" }}>
+            <div style={{ fontWeight: 600, color: "var(--danger)", marginBottom: 6 }}>Something went wrong</div>
+            <div style={{ fontSize: 13 }}>{result.error}</div>
+            <div style={{ fontSize: 12, color: "var(--steel-dim)", marginTop: 6 }}>Some changes may already be saved. Refresh the page to see what is stored. If it mentions a missing column, run the SQL for this feature first.</div>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          {result.ok && !result.undone && <button className="wsc-btn" onClick={undo} disabled={busy}><RotateCcw size={13} /> Undo this import</button>}
+          <button className="wsc-btn wsc-btn-primary" onClick={onClose}>Close</button>
+        </div>
+      </Modal>
+    );
+  }
+
+  if (!rows) {
+    return (
+      <Modal title="Import from tracker" onClose={onClose} wide>
+        <div style={{ fontSize: 13, color: "var(--steel)", marginBottom: 10 }}>
+          Open the tracker's Members page, select all, copy, and paste it below. For a long list, paste the pages one after another. Only name, power, alliance rank and labyrinth score are read. You review everything before anything is saved.
+        </div>
+        <textarea className="wsc-textarea" rows={10} style={{ fontFamily: "var(--font-mono)", fontSize: 12 }} value={text} onChange={(e) => setText(e.target.value)} placeholder="#01 lord64399716 · 1.38B · 1.56% · F80 · R3 · 💎 2,223 (#7)" />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, gap: 8, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 12.5, color: parsed.rows.length ? "var(--success)" : "var(--steel-dim)" }}>
+            {text.trim() ? `${parsed.rows.length} player${parsed.rows.length !== 1 ? "s" : ""} found${parsed.unreadable ? ` · ${parsed.unreadable} line${parsed.unreadable !== 1 ? "s" : ""} couldn't be read` : ""}` : "Nothing pasted yet"}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="wsc-btn" onClick={onClose}>Cancel</button>
+            <button className="wsc-btn wsc-btn-primary" disabled={parsed.rows.length === 0} style={{ opacity: parsed.rows.length ? 1 : 0.5 }} onClick={review}>Review &rarr;</button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  const exactN = rows.filter((r) => r.status === "exact").length;
+  const checkN = rows.filter((r) => r.status === "check").length;
+  const unresolvedN = rows.filter((r) => r.choice === "").length;
+  const notSeen = roster.filter((m) => !chosen.has(m.id)).length;
+  const applyCount = plan.growth.length + plan.newMembers.length;
+  return (
+    <Modal title="Import from tracker: review" onClose={onClose} wide>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+        <div style={{ fontSize: 12.5, color: "var(--steel-dim)", fontFamily: "var(--font-mono)" }}>
+          {rows.length} rows · {exactN} matched · <span style={{ color: checkN ? "var(--amber)" : undefined }}>{checkN} to check</span> · <span style={{ color: unresolvedN ? "var(--danger)" : undefined }}>{unresolvedN} need a match</span> · {notSeen} roster member{notSeen !== 1 ? "s" : ""} not in this list (left untouched){dupes ? ` · ${dupes} duplicate${dupes !== 1 ? "s" : ""} ignored` : ""}
+        </div>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}><input type="checkbox" className="wsc-checkbox" checked={onlyAttention} onChange={() => setOnlyAttention((v) => !v)} />Only rows needing attention</label>
+          {unresolvedN > 0 && <button className="wsc-btn wsc-btn-sm" onClick={() => setRows((prev) => prev.map((r) => (r.choice === "" ? { ...r, choice: "__new", include: true } : r)))}><Plus size={12} /> Add all unmatched as new members</button>}
+        </div>
+      </div>
+      <div className="wsc-scroll wsc-modal-flex-scroll" style={{ overflow: "auto", maxHeight: "55vh" }}>
+        <table className="wsc-table" style={{ minWidth: 820 }}>
+          <thead><tr><th style={{ width: 30 }}></th><th>Tracker name</th><th>Matched to</th><th>Power</th><th>Rank</th><th>Labyrinth</th></tr></thead>
+          <tbody>
+            {rows.map((r, i) => {
+              if (onlyAttention && !needsAttention(r)) return null;
+              const isMember = r.choice && r.choice[0] !== "_";
+              const m = isMember ? memberById[r.choice] : null;
+              const g = m ? growthById[m.id] : null;
+              const oldPower = g && g.power !== "" && g.power != null ? Number(g.power) : null;
+              const pct = oldPower ? (r.power - oldPower) / oldPower : null;
+              const big = pct != null && Math.abs(pct) > TRACKER_BIG_CHANGE;
+              const rankChanged = m && r.rank && r.rank !== m.rank;
+              const oldScore = g && g.labyrinthScore !== "" && g.labyrinthScore != null ? Number(g.labyrinthScore) : null;
+              return (
+                <tr key={r.pos + r.key} style={{ opacity: r.include ? 1 : 0.7 }}>
+                  <td><input type="checkbox" className="wsc-checkbox" checked={!!r.include} disabled={r.choice === "" || r.choice === "__skip"} onChange={() => update(i, { include: !r.include })} /></td>
+                  <td style={{ fontWeight: 600 }}><span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontWeight: 400, marginRight: 6 }}>#{r.pos}</span>{r.name}</td>
+                  <td>
+                    <select className="wsc-select" style={{ minWidth: 170 }} value={r.choice} onChange={(e) => choose(i, e.target.value)}>
+                      <option value="">- pick a member -</option>
+                      <option value="__new">+ Add as new member</option>
+                      <option value="__skip">Skip this row</option>
+                      {sortedRoster.map((mm) => <option key={mm.id} value={mm.id} disabled={chosen.has(mm.id) && r.choice !== mm.id}>{mm.name}</option>)}
+                    </select>
+                    {r.status === "check" && r.choice === r.auto && <SeatTag tone="amber" title="Close but not exact: tick the row only if this is the right person">Check</SeatTag>}
+                    {r.choice === "" && <SeatTag tone="amber">Needs match</SeatTag>}
+                    {r.choice === "__new" && <SeatTag>New member</SeatTag>}
+                  </td>
+                  <td style={{ fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
+                    {oldPower != null && <span style={{ color: "var(--steel-dim)" }}>{fmtPower(oldPower)} &rarr; </span>}<b>{fmtPower(r.power)}</b>
+                    {pct != null && <span style={{ color: big ? "var(--amber)" : "var(--steel-dim)", marginLeft: 6 }} title={big ? "Large change: check this is the right person" : undefined}>{pct >= 0 ? "+" : ""}{(pct * 100).toFixed(1)}%</span>}
+                  </td>
+                  <td style={{ fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
+                    {rankChanged ? <><span style={{ color: "var(--steel-dim)" }}>{m.rank} &rarr; </span><b style={{ color: "var(--amber)" }}>{r.rank}</b></> : (r.rank || m?.rank || "—")}
+                  </td>
+                  <td style={{ fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
+                    {oldScore != null && oldScore !== r.score && <span style={{ color: "var(--steel-dim)" }}>{fmtNum(oldScore)} &rarr; </span>}{r.score != null ? fmtNum(r.score) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+        <div style={{ fontSize: 12.5, color: "var(--steel-dim)" }}>
+          Will update {plan.growth.length} · add {plan.newMembers.length} new · change {plan.rankChanges} rank{plan.rankChanges !== 1 ? "s" : ""}{plan.conflicts ? ` · ${plan.conflicts} skipped (same member picked twice)` : ""}. Power from the tracker is rounded (like 1.38B).
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="wsc-btn wsc-btn-sm" onClick={onExportBackup}><Download size={12} /> Download backup first</button>
+          <button className="wsc-btn" onClick={() => setRows(null)}>&larr; Back</button>
+          <button className="wsc-btn wsc-btn-primary" disabled={busy || applyCount === 0} style={{ opacity: busy || applyCount === 0 ? 0.5 : 1 }} onClick={apply}><Save size={13} /> {busy ? "Saving…" : `Apply ${applyCount} update${applyCount !== 1 ? "s" : ""}`}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
 function GrowthTab({ members, growth, reliability, onEditMember }) {
+  const lab = useContext(LabyrinthContext);
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState("name");
   const [sortDir, setSortDir] = useState("asc");
@@ -1130,6 +1477,7 @@ function GrowthTab({ members, growth, reliability, onEditMember }) {
     const a = attendanceByMember[m.id];
     switch (sortKey) {
       case "power": return g && g.power !== "" ? Number(g.power) : -1;
+      case "labyrinth": return lab[m.id] ? lab[m.id].score : -1;
       case "attendance": return a ? a.attended / a.signedUp : -1;
       case "updated": return g?.updatedDate || "";
       case "trend": return reliability[m.id]?.trendVisible ? reliability[m.id].recent.rate : -1;
@@ -1168,6 +1516,7 @@ function GrowthTab({ members, growth, reliability, onEditMember }) {
                 <thead><tr>
                   <SortHeader sortKeyName="name">Member</SortHeader>
                   <SortHeader sortKeyName="power">Power</SortHeader>
+                  <SortHeader sortKeyName="labyrinth" title="Labyrinth rank within the alliance, from the score imported from the tracker. #1 = strongest. Click to sort.">Labyrinth</SortHeader>
                   <SortHeader sortKeyName="attendance">Attendance</SortHeader>
                   <SortHeader sortKeyName="trend" title="Unreliability trend: recent rate (last 5 sign-ups) vs all-time. Red ▲ = getting worse, green ▼ = improving. Shown from 3 sign-ups. Click to sort by recent rate.">Trend</SortHeader>
                   <th>Furnace</th>
@@ -1178,7 +1527,7 @@ function GrowthTab({ members, growth, reliability, onEditMember }) {
                 </tr></thead>
                 <tbody>
                   {sorted.length === 0 ? (
-                    <tr><td colSpan={9} style={{ padding: 20 }}><EmptyState title="No matches" body="Try a different search." /></td></tr>
+                    <tr><td colSpan={10} style={{ padding: 20 }}><EmptyState title="No matches" body="Try a different search." /></td></tr>
                   ) : sorted.map((m) => {
                     const g = byMember[m.id];
                     const a = attendanceByMember[m.id];
@@ -1186,6 +1535,7 @@ function GrowthTab({ members, growth, reliability, onEditMember }) {
                       <tr key={m.id} style={{ cursor: "pointer" }} onClick={() => onEditMember(m.id)}>
                         <td style={{ fontWeight: 600 }}><span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><RankBubble rank={m.rank} />{m.name}</span></td>
                         <td style={{ fontFamily: "var(--font-mono)" }}>{g && g.power !== "" ? <span title={fmtNum(g.power)}>{fmtPower(g.power)}</span> : "—"}</td>
+                        <td style={{ fontFamily: "var(--font-mono)", color: "var(--frost)" }}>{lab[m.id] ? <span title={`Score ${fmtNum(lab[m.id].score)}`}>#{lab[m.id].rank}</span> : <span style={{ color: "var(--steel-dim)" }}>—</span>}</td>
                         <td style={{ fontFamily: "var(--font-mono)", color: "var(--steel)" }}>{a ? `${a.attended}/${a.signedUp}` : "—"}</td>
                         <td style={{ fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>{reliability[m.id]?.trendVisible ? <>{Math.round(reliability[m.id].recent.rate * 100)}% <TrendMark trend={reliability[m.id].trend} /></> : <span style={{ color: "var(--steel-dim)" }}>—</span>}</td>
                         <td style={{ fontFamily: "var(--font-mono)" }}>{g?.furnaceLevel || "—"}</td>
@@ -1567,7 +1917,7 @@ function SeatPicker({ value, roster, usedIds, powerByMember, onSelect, pool }) {
             {outsider && <SeatTag tone="amber" title="Not in this event's sign-ups">Not signed up</SeatTag>}
             {isSub && <SeatTag title="Signed up as a sub">Sub</SeatTag>}
           </span>
-          {current ? <span style={{ display: "inline-flex", alignItems: "center" }}><MemberTrend id={current.id} />{powerByMember[current.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }} title={fmtNum(powerByMember[current.id])}>{fmtPower(powerByMember[current.id])}</span> : null}</span> : null}
+          {current ? <span style={{ display: "inline-flex", alignItems: "center" }}><LabyrinthTag id={current.id} /><MemberTrend id={current.id} />{powerByMember[current.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }} title={fmtNum(powerByMember[current.id])}>{fmtPower(powerByMember[current.id])}</span> : null}</span> : null}
         </div>
         <button className="wsc-btn wsc-btn-icon" onClick={() => onSelect("")} aria-label="Clear seat"><X size={12} color="var(--steel-dim)" /></button>
       </div>
@@ -1614,7 +1964,7 @@ function SeatPicker({ value, roster, usedIds, powerByMember, onSelect, pool }) {
                   {pool && inPool && pool.seatedIds.has(m.id) && <SeatTag>Seated</SeatTag>}
                   {pool && !inPool && <SeatTag title="Seating them adds them to the event as a Joiner">Not signed up</SeatTag>}
                 </span>
-                <span style={{ display: "inline-flex", alignItems: "center" }}><MemberTrend id={m.id} />{powerByMember[m.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }} title={fmtNum(powerByMember[m.id])}>{fmtPower(powerByMember[m.id])}</span> : null}</span>
+                <span style={{ display: "inline-flex", alignItems: "center" }}><LabyrinthTag id={m.id} /><MemberTrend id={m.id} />{powerByMember[m.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }} title={fmtNum(powerByMember[m.id])}>{fmtPower(powerByMember[m.id])}</span> : null}</span>
               </div>
             );
           })}
@@ -1657,7 +2007,7 @@ function PoolPanel({ pool, roster, onToggleAll }) {
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {[...unJ, ...unS].map((m) => (
                 <span key={m.id} className="wsc-pill" style={{ background: "var(--panel-2)", color: "var(--white)", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  {m.name}{isSub(m) && <SeatTag tone="amber">Sub</SeatTag>}<span style={{ marginLeft: 4 }}><MemberTrend id={m.id} /></span>
+                  {m.name}{isSub(m) && <SeatTag tone="amber">Sub</SeatTag>}<span style={{ marginLeft: 4 }}><LabyrinthTag id={m.id} /><MemberTrend id={m.id} /></span>
                 </span>
               ))}
             </div>
@@ -1668,7 +2018,7 @@ function PoolPanel({ pool, roster, onToggleAll }) {
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {outsiders.map((m) => (
                   <span key={m.id} className="wsc-pill" style={{ background: "transparent", color: "var(--steel)", border: "1px solid var(--border)", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    {m.name}<span style={{ marginLeft: 4 }}><MemberTrend id={m.id} /></span>
+                    {m.name}<span style={{ marginLeft: 4 }}><LabyrinthTag id={m.id} /><MemberTrend id={m.id} /></span>
                   </span>
                 ))}
               </div>
@@ -1986,6 +2336,7 @@ export default function App() {
   const [showAddEvent, setShowAddEvent] = useState(false);
   const [openEvent, setOpenEvent] = useState(null);
   const [openPlanRequest, setOpenPlanRequest] = useState(null);
+  const [showImport, setShowImport] = useState(false);
   const [growthPreset, setGrowthPreset] = useState(null);
 
   const openGrowthFor = useCallback((memberId) => { setGrowthPreset(memberId); setShowLogGrowth(true); }, []);
@@ -2048,6 +2399,7 @@ export default function App() {
   }, [userId]);
 
   const reliability = useMemo(() => computeReliability(participation, events, todayStr()), [participation, events]);
+  const labyrinthRanks = useMemo(() => computeLabyrinthRanks(growth, members), [growth, members]);
   const lastActivityByMember = useMemo(() => {
     const map = {};
     members.forEach((m) => { map[m.id] = null; });
@@ -2075,7 +2427,7 @@ export default function App() {
   const saveMember = useCallback(async (m) => {
     if (memberModal) {
       await supabase.from("members").update(memberToRow(m)).eq("id", m.id);
-      setMembers((prev) => prev.map((x) => x.id === m.id ? m : x));
+      setMembers((prev) => prev.map((x) => x.id === m.id ? { ...x, ...m } : x));
     } else {
       const { data, error } = await supabase.from("members").insert(memberToRow(m)).select().single();
       if (!error && data) setMembers((prev) => [...prev, rowToMember(data)]);
@@ -2106,6 +2458,25 @@ export default function App() {
     const saved = !error && data ? rowToGrowth(data) : profile;
     setGrowth((prev) => prev.some((g) => g.memberId === saved.memberId) ? prev.map((g) => g.memberId === saved.memberId ? saved : g) : [...prev, saved]);
     setShowLogGrowth(false);
+  }, []);
+
+  const applyTrackerImport = useCallback(async (plan) => {
+    try {
+      const { out, snapshot } = await runTrackerImport(supabase, plan, { members, growth, today: todayStr() });
+      setMembers((prev) => [...prev.map((m) => (out.memberPatches[m.id] ? { ...m, ...out.memberPatches[m.id] } : m)), ...out.newMembers]);
+      setGrowth((prev) => { const map = new Map(prev.map((g) => [g.memberId, g])); out.growthRows.forEach((g) => map.set(g.memberId, g)); return [...map.values()]; });
+      return { ok: true, snapshot, summary: { updated: plan.growth.length, added: plan.newMembers.length, rankChanges: plan.rankChanges, aliasAdds: plan.aliasAdds } };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }, [members, growth]);
+
+  const undoTrackerImport = useCallback(async (snapshot) => {
+    try {
+      const res = await runTrackerUndo(supabase, snapshot);
+      const removed = new Set(res.removedMemberIds), cleared = new Set(res.clearedGrowthFor);
+      setMembers((prev) => prev.filter((m) => !removed.has(m.id)).map((m) => (res.memberPatches[m.id] ? { ...m, ...res.memberPatches[m.id] } : m)));
+      setGrowth((prev) => { const map = new Map(prev.filter((g) => !removed.has(g.memberId) && !cleared.has(g.memberId)).map((g) => [g.memberId, g])); res.restoredGrowth.forEach((g) => map.set(g.memberId, g)); return [...map.values()]; });
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
   }, []);
 
   const addEvent = useCallback(async (ev) => {
@@ -2350,6 +2721,7 @@ export default function App() {
         "Infantry tier": c("infantry").troopTier, "Infantry FC level": c("infantry").fcTroopLevel, "Infantry T12 skills": c("infantry").t12Skills,
         "Marksman tier": c("marksman").troopTier, "Marksman FC level": c("marksman").fcTroopLevel, "Marksman T12 skills": c("marksman").t12Skills,
         "Lancer tier": c("lancer").troopTier, "Lancer FC level": c("lancer").fcTroopLevel, "Lancer T12 skills": c("lancer").t12Skills,
+        "Labyrinth score": g.labyrinthScore, "Labyrinth rank": labyrinthRanks[g.memberId]?.rank ?? "",
         Updated: g.updatedDate,
       };
     });
@@ -2372,7 +2744,7 @@ export default function App() {
     XLSX.utils.book_append_sheet(wb, wsEvents, "Events");
     XLSX.utils.book_append_sheet(wb, wsPart, "Participation");
     XLSX.writeFile(wb, `${(config.allianceName || "alliance").replace(/[^a-z0-9]+/gi, "-")}-export.xlsx`);
-  }, [members, growth, events, participation, config]);
+  }, [members, growth, events, participation, config, labyrinthRanks]);
 
   const exportSummary = useCallback(() => {
     const activeMembers = members.filter((m) => m.status !== "left");
@@ -2523,6 +2895,7 @@ export default function App() {
 
   return (
     <ReliabilityContext.Provider value={reliability}>
+    <LabyrinthContext.Provider value={labyrinthRanks}>
     <div className="wsc">
       <style>{STYLE}</style>
       <Sidebar tab={tab} setTab={setTab} allianceName={config.allianceName} leaderName={config.leaderName} leaverCount={leaverCount} />
@@ -2539,6 +2912,7 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {tab === "dashboard" && <button className="wsc-btn wsc-btn-icon" onClick={() => setShowConfig(true)} aria-label="Settings"><Settings size={15} /></button>}
             {tab === "roster" && <button className="wsc-btn wsc-btn-primary" onClick={() => setShowAddMember(true)}><Plus size={13} /> Add member</button>}
+            {tab === "growth" && <button className="wsc-btn" onClick={() => setShowImport(true)} disabled={roster.length === 0} style={{ opacity: roster.length === 0 ? 0.5 : 1 }}><Upload size={13} /> Import from tracker</button>}
             {tab === "growth" && <button className="wsc-btn wsc-btn-primary" onClick={() => openGrowthFor(null)} disabled={roster.length === 0} style={{ opacity: roster.length === 0 ? 0.5 : 1 }}><Plus size={13} /> Log data</button>}
             {tab === "events" && <button className="wsc-btn wsc-btn-primary" onClick={() => setShowAddEvent(true)}><Plus size={13} /> Add event</button>}
             <button className="wsc-btn wsc-btn-icon" onClick={() => supabase.auth.signOut()} aria-label="Sign out" title="Sign out"><LogOut size={15} /></button>
@@ -2564,10 +2938,12 @@ export default function App() {
       {showConfig && <ConfigModal config={config} onClose={() => setShowConfig(false)} onSave={saveConfig}
         onExportExcel={exportExcel} onExportSummary={exportSummary} onExportBackup={exportBackup} onImportBackup={importBackup} />}
       {(showAddMember || memberModal) && <MemberModal member={memberModal} onClose={() => { setShowAddMember(false); setMemberModal(null); }} onSave={saveMember} onDelete={deleteMember} />}
+      {showImport && <TrackerImportModal members={members} growth={growth} onApply={applyTrackerImport} onUndo={undoTrackerImport} onExportBackup={exportBackup} onClose={() => setShowImport(false)} />}
       {showLogGrowth && <LogGrowthModal members={roster} profiles={growth} initialMemberId={growthPreset} onClose={() => { setShowLogGrowth(false); setGrowthPreset(null); }} onSave={saveGrowth} />}
       {showAddEvent && <EventModal onClose={() => setShowAddEvent(false)} onSave={addEvent} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} />}
       {openEvent && <EventDetail event={events.find((e) => e.id === openEvent.id) || openEvent} members={members} participation={participation} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} onClose={() => setOpenEvent(null)} onDelete={deleteEvent} onToggleSignUp={toggleSignUp} onToggleAttend={toggleAttend} onSetDuration={setDuration} onScore={setScore} onNote={setNote} onSetRole={setRole} onImportFromPlan={importFromPlan} onCreatePlan={createPlanFromEvent} onOpenPlan={openPlan} />}
     </div>
+    </LabyrinthContext.Provider>
     </ReliabilityContext.Provider>
   );
 }
