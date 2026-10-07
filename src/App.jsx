@@ -106,10 +106,14 @@ const RELIABILITY = {
   },
 };
 const RELIABILITY_EPS = 1e-9;
+// An event is "final" (counts in rates and reliability) once its game day (UTC) has passed,
+// or on its own day once at least one attendee has been ticked. Future events are never final.
+const attendedEventIds = (participation) => { const set = new Set(); participation.forEach((p) => { if (p.attended) set.add(p.eventId); }); return set; };
+const isEventFinal = (ev, today, attendedSet) => ev.date < today || (ev.date === today && attendedSet.has(ev.id));
 const weightGroup = (type, role) => (STATE_EVENT_TYPES.has(type) ? "state" : usesRoles(type) && role === "sub" ? "sub" : "joiner");
 function computeReliability(participation, events, today) {
   const eventById = {}; events.forEach((e) => { eventById[e.id] = e; });
-  const hasAttendance = new Set(); participation.forEach((p) => { if (p.attended) hasAttendance.add(p.eventId); });
+  const hasAttendance = attendedEventIds(participation);
   const perMember = {};
   participation.forEach((p) => {
     if (!p.signedUp) return;
@@ -704,19 +708,20 @@ function Dashboard({ members, growth, events, participation, config, reliability
   const rows = view === "flagged" ? unreliable : everyone;
   const activeCount = activeMembers.length;
   const signedByEvent = useMemo(() => { const m = {}; participation.forEach((p) => { if (p.signedUp) m[p.eventId] = (m[p.eventId] || 0) + 1; }); return m; }, [participation]);
-  const latestEvent = [...events].filter((e) => e.date <= today && signedByEvent[e.id] > 0)
+  const finalSet = useMemo(() => attendedEventIds(participation), [participation]);
+  const latestEvent = [...events].filter((e) => isEventFinal(e, today, finalSet) && signedByEvent[e.id] > 0)
     .sort((a, b) => b.date.localeCompare(a.date) || signedByEvent[b.id] - signedByEvent[a.id])[0] || null;
   const latestEventSignups = latestEvent ? signedByEvent[latestEvent.id] : 0;
   const latestEventAttendance = latestEvent && latestEventSignups > 0 ? participation.filter((p) => p.eventId === latestEvent.id && p.attended).length / latestEventSignups : null;
   const readiness = latestEventAttendance !== null ? Math.round(latestEventAttendance * 100) : 0;
-  const recentEvents = useMemo(() => [...events].filter((e) => e.date <= today).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6).map((ev) => {
+  const recentEvents = useMemo(() => [...events].filter((e) => isEventFinal(e, today, finalSet)).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6).map((ev) => {
     const rows = participation.filter((p) => p.eventId === ev.id);
     const signed = rows.filter((p) => p.signedUp).length, attended = rows.filter((p) => p.attended).length;
     const rate = signed > 0 ? Math.round((attended / signed) * 100) : 0;
     return { ev, signed, attended, rate };
   }), [events, participation]);
   const avgTurnout = useMemo(() => {
-    const withSignups = events.filter((e) => e.date <= today && signedByEvent[e.id] > 0);
+    const withSignups = events.filter((e) => isEventFinal(e, today, finalSet) && signedByEvent[e.id] > 0);
     if (withSignups.length === 0) return 0;
     const total = withSignups.reduce((sum, e) => {
       const rows = participation.filter((p) => p.eventId === e.id);
@@ -1344,12 +1349,15 @@ function EventDetail({ event, members, participation, canyonAssignments, foundry
               const p = partMap[m.id];
               const isSub = hasRoles && p?.role === "sub";
               const noShow = !p?.attended;
+              const pending = !isEventFinal(event, todayStr(), attendedEventIds(participation));
               const accent = isBattle ? "var(--success)" : "var(--frost)";
               return (
                 <tr key={m.id}>
                   <td>{m.name}<span style={{ marginLeft: 8 }}><MemberTrend id={m.id} /></span>
                     {hasRoles && <RolePill role={isSub ? "sub" : "joiner"} onToggle={() => onSetRole(event.id, m.id, isSub ? "joiner" : "sub")} />}
-                    {isBattle && noShow && <span className="wsc-pill" style={{ background: "#E2604F22", color: "var(--danger)", marginLeft: 8 }}>{isSub ? "Not online" : "No-show"}</span>}
+                    {isBattle && noShow && (pending
+                      ? <span className="wsc-pill" style={{ background: "#8FA3B822", color: "var(--steel-dim)", marginLeft: 8 }} title="Not counted yet: tick who attended, or wait until the game day (UTC) ends">Pending</span>
+                      : <span className="wsc-pill" style={{ background: "#E2604F22", color: "var(--danger)", marginLeft: 8 }}>{isSub ? "Not online" : "No-show"}</span>)}
                   </td>
                   <td><button className="wsc-btn wsc-btn-icon" style={{ background: p?.attended ? `${isBattle ? "#5FBF8C" : "#6FCBEA"}22` : "transparent", borderColor: p?.attended ? accent : "var(--border)" }}
                     onClick={() => onToggleAttend(event.id, m.id, !p?.attended)} aria-label={isBattle ? "Toggle attended" : "Toggle participated"}><Check size={13} color={p?.attended ? accent : "var(--steel-dim)"} /></button></td>
@@ -1377,6 +1385,7 @@ function EventsTab({ events, members, participation, onOpenEvent }) {
   const [filter, setFilter] = useState("all");
   const activeMembers = members.filter((m) => m.status !== "left");
   const sorted = [...events].filter((e) => filter === "all" || e.type === filter).sort((a, b) => b.date.localeCompare(a.date));
+  const finalSet = attendedEventIds(participation), today = todayStr();
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginBottom: 14, gap: 8 }}>
@@ -1397,6 +1406,7 @@ function EventsTab({ events, members, participation, onOpenEvent }) {
                   const partial = rows.filter((p) => p.attended && p.durationStatus && p.durationStatus !== "full" && !(usesRoles(ev.type) && p.role === "sub")).length;
                   const noShows = rows.filter((p) => p.signedUp && !p.attended).length;
                   const rate = signed > 0 ? Math.round((attended / signed) * 100) : 0;
+                  const pending = !isEventFinal(ev, today, finalSet);
                   return (
                     <tr key={ev.id} style={{ cursor: "pointer" }} onClick={() => onOpenEvent(ev)}>
                       <td style={{ color: "var(--steel)" }}>{fmtDate(ev.date)}</td>
@@ -1405,8 +1415,8 @@ function EventsTab({ events, members, participation, onOpenEvent }) {
                       <td style={{ fontFamily: "var(--font-mono)" }}>{signed}</td>
                       <td style={{ fontFamily: "var(--font-mono)", color: "var(--success)" }}>{attended}</td>
                       <td style={{ fontFamily: "var(--font-mono)", color: partial > 0 ? "var(--amber)" : "var(--steel-dim)" }}>{partial}</td>
-                      <td style={{ fontFamily: "var(--font-mono)", color: noShows > 0 ? "var(--danger)" : "var(--steel-dim)" }}>{noShows}</td>
-                      <td style={{ fontFamily: "var(--font-mono)" }}>{rate}%</td>
+                      <td style={{ fontFamily: "var(--font-mono)", color: noShows > 0 && !pending ? "var(--danger)" : "var(--steel-dim)" }}>{pending ? "—" : noShows}</td>
+                      <td style={{ fontFamily: "var(--font-mono)", color: pending ? "var(--steel-dim)" : undefined }} title={pending ? "Pending: counts once attendance is ticked or the game day (UTC) ends" : undefined}>{pending ? "Pending" : `${rate}%`}</td>
                     </tr>
                   );
                 })}
@@ -2197,7 +2207,8 @@ export default function App() {
       return row;
     });
 
-    const recentEvents = [...events].filter((e) => e.date <= todayStr()).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10).map((ev) => {
+    const exportFinalSet = attendedEventIds(participation);
+    const recentEvents = [...events].filter((e) => isEventFinal(e, todayStr(), exportFinalSet)).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10).map((ev) => {
       const rows = participation.filter((p) => p.eventId === ev.id);
       const signed = rows.filter((p) => p.signedUp).length;
       const attended = rows.filter((p) => p.attended).length;
