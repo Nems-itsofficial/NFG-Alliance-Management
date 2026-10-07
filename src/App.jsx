@@ -46,6 +46,14 @@ const FOUNDRY_BUILDINGS = [
   { key: "arsenal", label: "Gathering Team (Arsenal Supplies)", col: "F", startRow: 31, seats: 4 },
   { key: "offensive", label: "Offensive Group / Gathering Team", col: "B", startRow: 40, seats: 2 },
 ];
+// Reads "Legion 1" / "LG2" style session labels; null when the label doesn't say.
+const detectLegion = (session) => {
+  const t = (session || "").toLowerCase();
+  if (/(legion|lg)\s*[-:]?\s*2\b/.test(t)) return "LG2";
+  if (/(legion|lg)\s*[-:]?\s*1\b/.test(t)) return "LG1";
+  return null;
+};
+const planTypeOf = (eventType) => (eventType === "Canyon Clash" ? "canyon" : eventType === "Foundry Battle" ? "foundry" : "");
 const sessionPlaceholder = (type) => (type === "Foundry Battle" || type === "Canyon Clash") ? 'e.g. "Legion 1" or "Legion 2"' : 'e.g. "Team 1" or "Team 2"';
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -1297,7 +1305,8 @@ function RolePill({ role, onToggle }) {
     </button>
   );
 }
-function EventDetail({ event, members, participation, canyonAssignments, foundryAssignments, onClose, onDelete, onToggleSignUp, onToggleAttend, onSetDuration, onSetRole, onScore, onNote, onImportFromPlan }) {
+function EventDetail({ event, members, participation, canyonAssignments, foundryAssignments, onClose, onDelete, onToggleSignUp, onToggleAttend, onSetDuration, onSetRole, onScore, onNote, onImportFromPlan, onCreatePlan, onOpenPlan }) {
+  const [creating, setCreating] = useState(false);
   const isBattle = event.mode === "strategy"; // stored value stays "strategy"; shown as Battle Record
   const hasRoles = usesRoles(event.type);
   const partMap = {};
@@ -1312,6 +1321,15 @@ function EventDetail({ event, members, participation, canyonAssignments, foundry
   };
   const linkedPlan = event.linkedType === "canyon" ? canyonAssignments.find((a) => a.id === event.linkedId)
     : event.linkedType === "foundry" ? foundryAssignments.find((a) => a.id === event.linkedId) : null;
+  const isPlanType = !!planTypeOf(event.type);
+  const detectedLegion = detectLegion(event.session);
+  const planSeatIds = linkedPlan ? [...new Set(Object.values(linkedPlan.seats || {}).flat().filter(Boolean))].filter((id) => members.some((m) => m.id === id)) : [];
+  const missingFromEvent = planSeatIds.filter((id) => !participantIds.has(id)).length;
+  const createPlan = async (legion) => {
+    if (creating) return;
+    setCreating(true);
+    try { await onCreatePlan(event, legion); } finally { setCreating(false); }
+  };
   return (
     <Modal title={`${event.name}${event.session ? ` · ${event.session}` : ""} — ${fmtDate(event.date)}`} onClose={onClose} wide>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
@@ -1327,7 +1345,17 @@ function EventDetail({ event, members, participation, canyonAssignments, foundry
           )}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          {linkedPlan && <button className="wsc-btn wsc-btn-sm" onClick={() => onImportFromPlan(event, linkedPlan)}><Users size={12} /> Import from "{linkedPlan.name}"</button>}
+          {isPlanType && !linkedPlan && (event.type === "Canyon Clash"
+            ? <button className="wsc-btn wsc-btn-sm" disabled={creating} onClick={() => createPlan(null)}><Plus size={12} /> Create plan from sign-ups</button>
+            : detectedLegion
+              ? <button className="wsc-btn wsc-btn-sm" disabled={creating} onClick={() => createPlan(detectedLegion)}><Plus size={12} /> Create plan from sign-ups ({detectedLegion === "LG2" ? "Legion 2" : "Legion 1"})</button>
+              : <>
+                  <button className="wsc-btn wsc-btn-sm" disabled={creating} onClick={() => createPlan("LG1")}><Plus size={12} /> Create plan · Legion 1</button>
+                  <button className="wsc-btn wsc-btn-sm" disabled={creating} onClick={() => createPlan("LG2")}><Plus size={12} /> Create plan · Legion 2</button>
+                </>)}
+          {linkedPlan && <button className="wsc-btn wsc-btn-sm" onClick={() => onOpenPlan(event.linkedType, linkedPlan.id)} title={`Open "${linkedPlan.name}"`}><Pencil size={12} /> Open plan</button>}
+          {linkedPlan && <button className="wsc-btn wsc-btn-sm" disabled={missingFromEvent === 0} onClick={() => onImportFromPlan(event, linkedPlan)}
+            title="Signs up anyone who has a seat in the linked plan but isn't in this event yet"><Users size={12} /> Add anyone seated but missing ({missingFromEvent})</button>}
           <button className="wsc-btn wsc-btn-sm wsc-btn-danger" onClick={handleDelete}><Trash2 size={12} /> Delete event</button>
         </div>
       </div>
@@ -1428,12 +1456,25 @@ function EventsTab({ events, members, participation, onOpenEvent }) {
     </div>
   );
 }
-function AssignmentModal({ onClose, onSave }) {
+function AssignmentModal({ onClose, onSave, events }) {
   const [type, setType] = useState("canyon");
   const [name, setName] = useState("");
   const [date, setDate] = useState(todayStr());
   const [legion, setLegion] = useState("LG1");
+  const [eventId, setEventId] = useState("");
   const canSave = name.trim().length > 0;
+  const typeName = type === "canyon" ? "Canyon Clash" : type === "foundry" ? "Foundry Battle" : "";
+  const today = todayStr();
+  const ofType = typeName ? events.filter((e) => e.type === typeName) : [];
+  const fromEvents = [...ofType.filter((e) => e.date >= today).sort((a, b) => a.date.localeCompare(b.date)), ...ofType.filter((e) => e.date < today).sort((a, b) => b.date.localeCompare(a.date))].slice(0, 15);
+  const pickEvent = (id) => {
+    setEventId(id);
+    const ev = events.find((e) => e.id === id);
+    if (!ev) return;
+    setName(`${ev.type}${ev.session ? ` · ${ev.session}` : ""} — ${fmtDate(ev.date)}`);
+    setDate(ev.date);
+    const lg = detectLegion(ev.session); if (lg) setLegion(lg);
+  };
   const placeholders = { canyon: 'e.g. "Canyon Clash — Aug 28"', foundry: 'e.g. "Foundry Battle — Aug 30"', custom: 'e.g. "Alliance Championship — Sep 2"' };
   const build = () => {
     const base = { id: uid(), name, date };
@@ -1444,12 +1485,21 @@ function AssignmentModal({ onClose, onSave }) {
   return (
     <Modal title="Create new event plan" onClose={onClose}>
       <div className="wsc-field"><label className="wsc-label">Type</label>
-        <select className="wsc-select" value={type} onChange={(e) => setType(e.target.value)}>
+        <select className="wsc-select" value={type} onChange={(e) => { setType(e.target.value); setEventId(""); }}>
           <option value="canyon">Canyon Clash</option>
           <option value="foundry">Foundry Battle</option>
           <option value="custom">Custom event</option>
         </select>
       </div>
+      {fromEvents.length > 0 && (
+        <div className="wsc-field"><label className="wsc-label">Start from an existing event (optional)</label>
+          <select className="wsc-select" value={eventId} onChange={(e) => pickEvent(e.target.value)}>
+            <option value="">None - blank plan</option>
+            {fromEvents.map((e) => <option key={e.id} value={e.id}>{fmtDate(e.date)}{e.session ? ` · ${e.session}` : ""}</option>)}
+          </select>
+          <div style={{ fontSize: 11.5, color: "var(--steel-dim)", marginTop: 5 }}>The plan links to that event and seats people from its sign-ups.</div>
+        </div>
+      )}
       <div className="wsc-field"><label className="wsc-label">Name</label>
         <input className="wsc-input" value={name} onChange={(e) => setName(e.target.value)} placeholder={placeholders[type]} /></div>
       {type === "foundry" && (
@@ -1465,30 +1515,52 @@ function AssignmentModal({ onClose, onSave }) {
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
         <button className="wsc-btn" onClick={onClose}>Cancel</button>
         <button className="wsc-btn wsc-btn-primary" disabled={!canSave} style={{ opacity: canSave ? 1 : 0.5 }}
-          onClick={() => canSave && onSave(type, build())}><Save size={13} /> Create</button>
+          onClick={() => canSave && onSave(type, build(), eventId || null)}><Save size={13} /> Create</button>
       </div>
     </Modal>
   );
 }
-function SeatPicker({ value, roster, usedIds, powerByMember, onSelect }) {
+const SeatTag = ({ children, tone, title }) => (
+  <span title={title} style={{ marginLeft: 6, padding: "0 6px", borderRadius: 10, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", fontFamily: "var(--font-mono)",
+    color: tone === "amber" ? "var(--amber)" : "var(--steel-dim)", border: `1px solid ${tone === "amber" ? "#E8A33D88" : "var(--border)"}` }}>{children}</span>
+);
+// `pool` (optional) = { ids:Set of signed-up member ids, roles:{id:role}, seatedIds:Set, showAll:bool, onAddSignUp(id) }.
+// With a pool, the dropdown lists the event's sign-ups (joiners first, then subs); "Show whole roster" also lists everyone else,
+// and seating someone who isn't signed up adds them to the event as a Joiner.
+function SeatPicker({ value, roster, usedIds, powerByMember, onSelect, pool }) {
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState(false);
+  const [focused, setFocused] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
   const itemRefs = useRef([]);
   const current = roster.find((m) => m.id === value) || null;
   const isFreeText = !!value && !current; // a value that isn't any real member's id
 
-  const candidates = query
-    ? roster.filter((m) => (!usedIds.has(m.id) || m.id === value) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 15)
-    : [];
+  const q = query.toLowerCase();
+  let candidates = [];
+  if (pool) {
+    const avail = roster.filter((m) => (!usedIds.has(m.id) || m.id === value) && (!q || m.name.toLowerCase().includes(q)));
+    const rank = (m) => (pool.seatedIds.has(m.id) ? 2 : 0) + (pool.roles[m.id] === "sub" ? 1 : 0); // unseated joiners, unseated subs, seated joiners, seated subs
+    const inPool = avail.filter((m) => pool.ids.has(m.id)).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+    const outside = pool.showAll ? avail.filter((m) => !pool.ids.has(m.id)) : [];
+    candidates = [...inPool, ...outside].slice(0, q ? 30 : 80);
+  } else if (query) {
+    candidates = roster.filter((m) => (!usedIds.has(m.id) || m.id === value) && m.name.toLowerCase().includes(q)).slice(0, 15);
+  }
+  const showList = pool ? focused : !!query;
   useEffect(() => { itemRefs.current[highlighted]?.scrollIntoView({ block: "nearest" }); }, [highlighted]);
 
   if (value && !editing) {
+    const outsider = current && pool && !pool.ids.has(current.id);
+    const isSub = current && pool && pool.ids.has(current.id) && pool.roles[current.id] === "sub";
     return (
       <div style={{ display: "flex", gap: 6, flex: 1 }}>
         <div className="wsc-input" style={{ flex: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}
           onClick={() => { setEditing(true); setQuery(isFreeText ? value : ""); }}>
-          <span>{current ? current.name : value}</span>
+          <span>{current ? current.name : value}
+            {outsider && <SeatTag tone="amber" title="Not in this event's sign-ups">Not signed up</SeatTag>}
+            {isSub && <SeatTag title="Signed up as a sub">Sub</SeatTag>}
+          </span>
           {current ? <span style={{ display: "inline-flex", alignItems: "center" }}><MemberTrend id={current.id} />{powerByMember[current.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }} title={fmtNum(powerByMember[current.id])}>{fmtPower(powerByMember[current.id])}</span> : null}</span> : null}
         </div>
         <button className="wsc-btn wsc-btn-icon" onClick={() => onSelect("")} aria-label="Clear seat"><X size={12} color="var(--steel-dim)" /></button>
@@ -1497,7 +1569,10 @@ function SeatPicker({ value, roster, usedIds, powerByMember, onSelect }) {
   }
 
   const commitFreeText = () => { if (query.trim()) { onSelect(query.trim()); setQuery(""); setEditing(false); } };
-  const selectCandidate = (m) => { onSelect(m.id); setQuery(""); setEditing(false); setHighlighted(0); };
+  const selectCandidate = (m) => {
+    if (pool && !pool.ids.has(m.id)) pool.onAddSignUp(m.id); // seated but not signed up -> add to the event as a Joiner
+    onSelect(m.id); setQuery(""); setEditing(false); setHighlighted(0);
+  };
   const handleKeyDown = (e) => {
     if (e.key === "ArrowDown") { e.preventDefault(); setHighlighted((h) => Math.min(h + 1, Math.max(candidates.length - 1, 0))); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setHighlighted((h) => Math.max(h - 1, 0)); }
@@ -1509,28 +1584,78 @@ function SeatPicker({ value, roster, usedIds, powerByMember, onSelect }) {
   };
   return (
     <div style={{ position: "relative", flex: 1 }}>
-      <input className="wsc-input" placeholder="Search a member, or type any name…" value={query} autoFocus={editing}
+      <input className="wsc-input" placeholder={pool ? "Pick from sign-ups, or type any name…" : "Search a member, or type any name…"} value={query} autoFocus={editing}
         onChange={(e) => { setQuery(e.target.value); setHighlighted(0); }}
         onKeyDown={handleKeyDown}
-        onBlur={() => setTimeout(commitFreeText, 150)} />
-      {query && (
-        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 8, marginTop: 4, maxHeight: 180, overflowY: "auto", zIndex: 20 }}>
+        onFocus={() => setFocused(true)}
+        onBlur={() => { setFocused(false); setTimeout(commitFreeText, 150); }} />
+      {showList && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 8, marginTop: 4, maxHeight: 220, overflowY: "auto", zIndex: 20 }}>
           {candidates.length === 0 ? (
-            <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>No roster matches — press Enter to use "{query}" as typed</div>
-          ) : candidates.map((m, i) => (
-            <div key={m.id} ref={(el) => (itemRefs.current[i] = el)} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, display: "flex", justifyContent: "space-between", background: i === highlighted ? "var(--bg-elev)" : "transparent" }}
-              onMouseEnter={() => setHighlighted(i)}
-              onMouseDown={() => selectCandidate(m)}>
-              <span>{m.name}</span>
-              <span style={{ display: "inline-flex", alignItems: "center" }}><MemberTrend id={m.id} />{powerByMember[m.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }} title={fmtNum(powerByMember[m.id])}>{fmtPower(powerByMember[m.id])}</span> : null}</span>
+            <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>
+              {pool
+                ? (query ? `No sign-ups match - press Enter to use "${query}" as typed, or turn on "Show whole roster"` : 'No sign-ups left to seat. Add sign-ups in the event, or turn on "Show whole roster".')
+                : `No roster matches — press Enter to use "${query}" as typed`}
             </div>
+          ) : candidates.map((m, i) => {
+            const inPool = !pool || pool.ids.has(m.id);
+            return (
+              <div key={m.id} ref={(el) => (itemRefs.current[i] = el)} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, display: "flex", justifyContent: "space-between", background: i === highlighted ? "var(--bg-elev)" : "transparent", opacity: pool && pool.seatedIds.has(m.id) && m.id !== value ? 0.6 : 1 }}
+                onMouseEnter={() => setHighlighted(i)}
+                onMouseDown={() => selectCandidate(m)}>
+                <span>{m.name}
+                  {pool && inPool && pool.roles[m.id] === "sub" && <SeatTag tone="amber">Sub</SeatTag>}
+                  {pool && inPool && pool.seatedIds.has(m.id) && <SeatTag>Seated</SeatTag>}
+                  {pool && !inPool && <SeatTag title="Seating them adds them to the event as a Joiner">Not signed up</SeatTag>}
+                </span>
+                <span style={{ display: "inline-flex", alignItems: "center" }}><MemberTrend id={m.id} />{powerByMember[m.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }} title={fmtNum(powerByMember[m.id])}>{fmtPower(powerByMember[m.id])}</span> : null}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+function PoolPanel({ pool, roster, onToggleAll }) {
+  const [open, setOpen] = useState(false);
+  const pooled = roster.filter((m) => pool.ids.has(m.id));
+  const isSub = (m) => pool.roles[m.id] === "sub";
+  const unseated = pooled.filter((m) => !pool.seatedIds.has(m.id));
+  const unJ = unseated.filter((m) => !isSub(m)), unS = unseated.filter(isSub);
+  const ev = pool.event;
+  return (
+    <div className="wsc-card" style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 13 }}>
+          <span style={{ color: "var(--steel-dim)" }}>Seating from </span><b>{ev.name}{ev.session ? ` · ${ev.session}` : ""} — {fmtDate(ev.date)}</b>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--steel-dim)", marginTop: 3 }}>
+            {pooled.length} signed up · {pooled.length - unseated.length} seated ·{" "}
+            <span style={{ color: unJ.length ? "var(--amber)" : "var(--success)" }}>Not seated: {unJ.length} joiner{unJ.length !== 1 ? "s" : ""}</span>
+            {unS.length > 0 && ` · ${unS.length} sub${unS.length !== 1 ? "s" : ""}`}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }} title="Seating someone who isn't signed up adds them to the event as a Joiner">
+            <input type="checkbox" className="wsc-checkbox" checked={pool.showAll} onChange={onToggleAll} />Show whole roster
+          </label>
+          <button className="wsc-btn wsc-btn-sm" onClick={() => setOpen((o) => !o)} disabled={unseated.length === 0}>{open ? "Hide" : "Show who's left"}</button>
+        </div>
+      </div>
+      {open && unseated.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+          {[...unJ, ...unS].map((m) => (
+            <span key={m.id} className="wsc-pill" style={{ background: "var(--panel-2)", color: "var(--white)", display: "inline-flex", alignItems: "center", gap: 4 }}>
+              {m.name}{isSub(m) && <SeatTag tone="amber">Sub</SeatTag>}<span style={{ marginLeft: 4 }}><MemberTrend id={m.id} /></span>
+            </span>
           ))}
         </div>
       )}
     </div>
   );
 }
-function CanyonEditor({ assignment, members, growth, onChangeSeats, onExport, onDelete, onBack }) {
+function CanyonEditor({ assignment, members, growth, pool, onChangeSeats, onExport, onDelete, onBack }) {
+  const [showAll, setShowAll] = useState(false);
   const roster = members.filter((m) => m.status !== "left");
   const powerByMember = useMemo(() => { const map = {}; growth.forEach((g) => { map[g.memberId] = g.power; }); return map; }, [growth]);
   const seats = assignment.seats || {};
@@ -1542,6 +1667,7 @@ function CanyonEditor({ assignment, members, growth, onChangeSeats, onExport, on
   };
   const filledCount = [...usedIds].length;
   const totalSeats = CANYON_TEAMS.reduce((s, t) => s + t.seats, 0);
+  const poolFull = pool ? { ...pool, showAll, seatedIds: usedIds } : null;
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
@@ -1552,6 +1678,7 @@ function CanyonEditor({ assignment, members, growth, onChangeSeats, onExport, on
           <button className="wsc-btn wsc-btn-primary" onClick={onExport}><Download size={13} /> Export to Excel</button>
         </div>
       </div>
+      {poolFull && <PoolPanel pool={poolFull} roster={roster} onToggleAll={() => setShowAll((v) => !v)} />}
       {CANYON_TEAMS.map((team) => (
         <div key={team.key} className="wsc-card" style={{ marginBottom: 12 }}>
           <div className="wsc-stat-label" style={{ marginBottom: 10 }}>{team.label} <span style={{ color: "var(--steel-dim)", fontWeight: 400 }}>({team.seats} seats)</span></div>
@@ -1560,7 +1687,7 @@ function CanyonEditor({ assignment, members, growth, onChangeSeats, onExport, on
             return (
               <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
                 <span style={{ width: 22, textAlign: "right", color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{i + 1}</span>
-                <SeatPicker value={currentId} roster={roster} usedIds={usedIds} powerByMember={powerByMember}
+                <SeatPicker value={currentId} roster={roster} usedIds={usedIds} powerByMember={powerByMember} pool={poolFull}
                   onSelect={(id) => setSeat(team.key, i, id)} />
               </div>
             );
@@ -1570,12 +1697,14 @@ function CanyonEditor({ assignment, members, growth, onChangeSeats, onExport, on
     </div>
   );
 }
-function FoundryEditor({ assignment, members, growth, onChangeSeats, onExport, onDelete, onBack }) {
+function FoundryEditor({ assignment, members, growth, pool, onChangeSeats, onExport, onDelete, onBack }) {
+  const [showAll, setShowAll] = useState(false);
   const roster = members.filter((m) => m.status !== "left");
   const powerByMember = useMemo(() => { const map = {}; growth.forEach((g) => { map[g.memberId] = g.power; }); return map; }, [growth]);
   const seats = assignment.seats || {};
   const totalSeats = FOUNDRY_BUILDINGS.reduce((s, b) => s + b.seats, 0);
   const filled = Object.values(seats).flat().filter(Boolean).length;
+  const poolFull = pool ? { ...pool, showAll, seatedIds: new Set(Object.values(seats).flat().filter(Boolean)) } : null;
   const setSeat = (buildingKey, idx, memberId) => {
     const arr = [...(seats[buildingKey] || [])];
     arr[idx] = memberId || null;
@@ -1591,13 +1720,14 @@ function FoundryEditor({ assignment, members, growth, onChangeSeats, onExport, o
           <button className="wsc-btn wsc-btn-primary" onClick={onExport}><Download size={13} /> Export to Excel</button>
         </div>
       </div>
+      {poolFull && <PoolPanel pool={poolFull} roster={roster} onToggleAll={() => setShowAll((v) => !v)} />}
       {FOUNDRY_BUILDINGS.map((b) => (
         <div key={b.key} className="wsc-card" style={{ marginBottom: 10 }}>
           <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8, color: "var(--steel)" }}>{b.label} <span style={{ color: "var(--steel-dim)", fontWeight: 400 }}>({b.seats} seats)</span></div>
           {Array.from({ length: b.seats }).map((_, i) => (
             <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
               <span style={{ width: 22, textAlign: "right", color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{i + 1}</span>
-              <SeatPicker value={seats[b.key]?.[i] || ""} roster={roster} usedIds={new Set()} powerByMember={powerByMember}
+              <SeatPicker value={seats[b.key]?.[i] || ""} roster={roster} usedIds={new Set()} powerByMember={powerByMember} pool={poolFull}
                 onSelect={(id) => setSeat(b.key, i, id)} />
             </div>
           ))}
@@ -1697,6 +1827,7 @@ function CustomEditor({ assignment, members, growth, onChangeTeams, onExport, on
   );
 }
 function AssignmentsTab({ canyonAssignments, foundryAssignments, customAssignments, members, growth,
+  events, participation, onAddSignUp, openRequest, onOpenRequestHandled,
   onCreateCanyon, onChangeCanyonSeats, onExportCanyon, onDeleteCanyon,
   onCreateFoundry, onChangeFoundrySeats, onExportFoundry, onDeleteFoundry,
   onCreateCustom, onChangeCustomTeams, onExportCustom, onDeleteCustom }) {
@@ -1705,19 +1836,38 @@ function AssignmentsTab({ canyonAssignments, foundryAssignments, customAssignmen
   const [openFoundryId, setOpenFoundryId] = useState(null);
   const [openCustomId, setOpenCustomId] = useState(null);
 
+  useEffect(() => {
+    if (!openRequest) return;
+    setOpenCanyonId(openRequest.type === "canyon" ? openRequest.id : null);
+    setOpenFoundryId(openRequest.type === "foundry" ? openRequest.id : null);
+    setOpenCustomId(null);
+    onOpenRequestHandled();
+  }, [openRequest]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The event linked to a plan is its sign-up pool.
+  const poolFor = (type, plan) => {
+    const ev = events.find((e) => e.linkedType === type && e.linkedId === plan.id);
+    if (!ev) return null;
+    const ids = new Set(), roles = {};
+    participation.forEach((p) => { if (p.eventId === ev.id && p.signedUp) { ids.add(p.memberId); roles[p.memberId] = p.role; } });
+    return { event: ev, ids, roles, onAddSignUp: (memberId) => onAddSignUp(ev.id, memberId) };
+  };
+  const planIds = new Set([...canyonAssignments, ...foundryAssignments].map((a) => a.id));
+  const availableEvents = events.filter((e) => planTypeOf(e.type) && !(e.linkedId && planIds.has(e.linkedId)));
+
   const openCanyon = canyonAssignments.find((a) => a.id === openCanyonId);
   const openFoundry = foundryAssignments.find((a) => a.id === openFoundryId);
   const openCustom = customAssignments.find((a) => a.id === openCustomId);
 
   if (openCanyon) {
-    return <CanyonEditor assignment={openCanyon} members={members} growth={growth}
+    return <CanyonEditor assignment={openCanyon} members={members} growth={growth} pool={poolFor("canyon", openCanyon)}
       onChangeSeats={(seats) => onChangeCanyonSeats(openCanyon.id, seats)}
       onExport={() => onExportCanyon(openCanyon)}
       onDelete={() => { onDeleteCanyon(openCanyon.id); setOpenCanyonId(null); }}
       onBack={() => setOpenCanyonId(null)} />;
   }
   if (openFoundry) {
-    return <FoundryEditor assignment={openFoundry} members={members} growth={growth}
+    return <FoundryEditor assignment={openFoundry} members={members} growth={growth} pool={poolFor("foundry", openFoundry)}
       onChangeSeats={(seats) => onChangeFoundrySeats(openFoundry.id, seats)}
       onExport={() => onExportFoundry(openFoundry)}
       onDelete={() => { onDeleteFoundry(openFoundry.id); setOpenFoundryId(null); }}
@@ -1762,6 +1912,10 @@ function AssignmentsTab({ canyonAssignments, foundryAssignments, customAssignmen
               const teamCount = (a.teams || []).length;
               summary = `${teamCount} team${teamCount !== 1 ? "s" : ""}`;
             }
+            if (a._type !== "custom") {
+              const linkedEv = events.find((e) => e.linkedType === a._type && e.linkedId === a.id);
+              if (linkedEv) summary += ` · ${participation.filter((p) => p.eventId === linkedEv.id && p.signedUp).length} signed up`;
+            }
             const onClick = () => { if (a._type === "canyon") setOpenCanyonId(a.id); else if (a._type === "foundry") setOpenFoundryId(a.id); else setOpenCustomId(a.id); };
             return (
               <div key={`${a._type}-${a.id}`} className="wsc-card" style={{ cursor: "pointer" }} onClick={onClick}>
@@ -1778,8 +1932,8 @@ function AssignmentsTab({ canyonAssignments, foundryAssignments, customAssignmen
           })}
         </div>
       )}
-      {showNew && <AssignmentModal onClose={() => setShowNew(false)} onSave={(type, a) => {
-        if (type === "canyon") onCreateCanyon(a); else if (type === "foundry") onCreateFoundry(a); else onCreateCustom(a);
+      {showNew && <AssignmentModal events={availableEvents} onClose={() => setShowNew(false)} onSave={(type, a, evId) => {
+        if (type === "canyon") onCreateCanyon(a, evId); else if (type === "foundry") onCreateFoundry(a, evId); else onCreateCustom(a);
         setShowNew(false);
       }} />}
     </div>
@@ -1806,6 +1960,7 @@ export default function App() {
   const [showLogGrowth, setShowLogGrowth] = useState(false);
   const [showAddEvent, setShowAddEvent] = useState(false);
   const [openEvent, setOpenEvent] = useState(null);
+  const [openPlanRequest, setOpenPlanRequest] = useState(null);
   const [growthPreset, setGrowthPreset] = useState(null);
 
   const openGrowthFor = useCallback((memberId) => { setGrowthPreset(memberId); setShowLogGrowth(true); }, []);
@@ -1941,11 +2096,20 @@ export default function App() {
     setOpenEvent(null);
   }, []);
 
-  const createCanyonAssignment = useCallback(async (a) => {
-    const { data, error } = await supabase.from("canyon_assignments").insert(canyonToRow(a)).select().single();
-    if (!error && data) setCanyonAssignments((prev) => [rowToCanyon(data), ...prev]);
-    else if (error) window.alert(`Couldn't create plan: ${error.message}`);
+  const linkEventToPlan = useCallback(async (eventId, linkedType, planId) => {
+    const { error } = await supabase.from("events").update({ linked_type: linkedType, linked_id: planId }).eq("id", eventId);
+    if (error) { window.alert(`Plan created, but linking it to the event failed: ${error.message}`); return; }
+    setEvents((prev) => prev.map((e) => e.id === eventId ? { ...e, linkedType, linkedId: planId } : e));
   }, []);
+
+  const createCanyonAssignment = useCallback(async (a, eventId) => {
+    const { data, error } = await supabase.from("canyon_assignments").insert(canyonToRow(a)).select().single();
+    if (error || !data) { if (error) window.alert(`Couldn't create plan: ${error.message}`); return null; }
+    const saved = rowToCanyon(data);
+    setCanyonAssignments((prev) => [saved, ...prev]);
+    if (eventId) await linkEventToPlan(eventId, "canyon", saved.id);
+    return saved;
+  }, [linkEventToPlan]);
 
   const changeCanyonSeats = useCallback(async (id, seats) => {
     setCanyonAssignments((prev) => prev.map((a) => a.id === id ? { ...a, seats } : a)); // optimistic
@@ -2009,11 +2173,25 @@ export default function App() {
     }
   }, [members]);
 
-  const createFoundryAssignment = useCallback(async (a) => {
+  const createFoundryAssignment = useCallback(async (a, eventId) => {
     const { data, error } = await supabase.from("foundry_assignments").insert(foundryToRow(a)).select().single();
-    if (!error && data) setFoundryAssignments((prev) => [rowToFoundry(data), ...prev]);
-    else if (error) window.alert(`Couldn't create plan: ${error.message}`);
-  }, []);
+    if (error || !data) { if (error) window.alert(`Couldn't create plan: ${error.message}`); return null; }
+    const saved = rowToFoundry(data);
+    setFoundryAssignments((prev) => [saved, ...prev]);
+    if (eventId) await linkEventToPlan(eventId, "foundry", saved.id);
+    return saved;
+  }, [linkEventToPlan]);
+
+  // Event-first: build a plan from an event (linked automatically) and jump straight into it.
+  const createPlanFromEvent = useCallback(async (event, legion) => {
+    const type = planTypeOf(event.type);
+    if (!type) return;
+    const base = { name: `${event.type}${event.session ? ` · ${event.session}` : ""} — ${fmtDate(event.date)}`, date: event.date, seats: {} };
+    const saved = type === "canyon" ? await createCanyonAssignment(base, event.id) : await createFoundryAssignment({ ...base, legion: legion || detectLegion(event.session) || "LG1" }, event.id);
+    if (!saved) return;
+    setOpenEvent(null); setTab("assignments"); setOpenPlanRequest({ type, id: saved.id });
+  }, [createCanyonAssignment, createFoundryAssignment]);
+  const openPlan = useCallback((type, id) => { setOpenEvent(null); setTab("assignments"); setOpenPlanRequest({ type, id }); }, []);
 
   const changeFoundrySeats = useCallback(async (id, seats) => {
     setFoundryAssignments((prev) => prev.map((a) => a.id === id ? { ...a, seats } : a));
@@ -2349,6 +2527,8 @@ export default function App() {
           {tab === "events" && <EventsTab events={events} members={members} participation={participation} onOpenEvent={(ev) => setOpenEvent(ev)} />}
           {tab === "assignments" && <AssignmentsTab
             canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} customAssignments={customAssignments}
+            events={events} participation={participation} onAddSignUp={(evId, mId) => toggleSignUp(evId, mId, true)}
+            openRequest={openPlanRequest} onOpenRequestHandled={() => setOpenPlanRequest(null)}
             members={members} growth={growth}
             onCreateCanyon={createCanyonAssignment} onChangeCanyonSeats={changeCanyonSeats} onExportCanyon={exportCanyonAssignment} onDeleteCanyon={deleteCanyonAssignment}
             onCreateFoundry={createFoundryAssignment} onChangeFoundrySeats={changeFoundrySeats} onExportFoundry={exportFoundryAssignment} onDeleteFoundry={deleteFoundryAssignment}
@@ -2361,7 +2541,7 @@ export default function App() {
       {(showAddMember || memberModal) && <MemberModal member={memberModal} onClose={() => { setShowAddMember(false); setMemberModal(null); }} onSave={saveMember} onDelete={deleteMember} />}
       {showLogGrowth && <LogGrowthModal members={roster} profiles={growth} initialMemberId={growthPreset} onClose={() => { setShowLogGrowth(false); setGrowthPreset(null); }} onSave={saveGrowth} />}
       {showAddEvent && <EventModal onClose={() => setShowAddEvent(false)} onSave={addEvent} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} />}
-      {openEvent && <EventDetail event={openEvent} members={members} participation={participation} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} onClose={() => setOpenEvent(null)} onDelete={deleteEvent} onToggleSignUp={toggleSignUp} onToggleAttend={toggleAttend} onSetDuration={setDuration} onScore={setScore} onNote={setNote} onSetRole={setRole} onImportFromPlan={importFromPlan} />}
+      {openEvent && <EventDetail event={events.find((e) => e.id === openEvent.id) || openEvent} members={members} participation={participation} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} onClose={() => setOpenEvent(null)} onDelete={deleteEvent} onToggleSignUp={toggleSignUp} onToggleAttend={toggleAttend} onSetDuration={setDuration} onScore={setScore} onNote={setNote} onSetRole={setRole} onImportFromPlan={importFromPlan} onCreatePlan={createPlanFromEvent} onOpenPlan={openPlan} />}
     </div>
     </ReliabilityContext.Provider>
   );
