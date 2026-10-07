@@ -233,7 +233,8 @@ function parseTrackerText(text) {
     if (!last) { if (chunk.trim()) unreadable++; return; }
     const name = chunk.slice(0, last.index).replace(/[\s·•|\-–—]+$/, "").replace(/^[\s·•|\-–—]+/, "").replace(/\s*\n\s*/g, " ").trim();
     if (!name) { unreadable++; return; }
-    const tail = chunk.slice(last.index + last[0].length);
+    // Discord-style emoji (":wos_mystic_9fa0c786:" or "<:name:123>") and the "(#7)" state rank are noise; their digits must not be read as the score.
+    const tail = chunk.slice(last.index + last[0].length).replace(/<a?:\w+:\d+>/g, " ").replace(/:[A-Za-z0-9_]{2,}:/g, " ").replace(/\(#\d+\)/g, " ");
     const rk = tail.match(/\bR([1-5])\b/);
     const after = rk ? tail.slice(rk.index + rk[0].length) : tail;
     const sc = after.match(/(\d{1,3}(?:,\d{3})+|\d{3,6})/);
