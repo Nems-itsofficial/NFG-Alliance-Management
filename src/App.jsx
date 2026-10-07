@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, createContext, useContext } from "react";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
@@ -63,11 +63,16 @@ const daysAgo = (d) => {
   return Math.floor((Date.now() - dt.getTime()) / 86400000);
 };
 const fmtNum = (n) => (n === null || n === undefined || n === "" || isNaN(n)) ? "—" : Number(n).toLocaleString();
-const fmtCompact = (n) => {
-  if (!n || isNaN(n)) return "0";
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
-  if (n >= 1e3) return (n / 1e3).toFixed(0) + "K";
+// Display-only power shorthand: 1.38B, 1.1B, 801M, 45.3M. Stored values and Excel exports stay raw numbers.
+const trimZeros = (str) => str.replace(/\.?0+$/, "");
+const fmtPower = (n) => {
+  if (n === null || n === undefined || n === "" || isNaN(n)) return "—";
+  n = Number(n);
+  const wholeM = Math.round(n / 1e6);
+  if (n >= 1e9 || wholeM >= 1000) return trimZeros((n / 1e9).toFixed(2)) + "B";
+  if (n >= 1e8) return wholeM + "M";
+  if (n >= 1e6) return trimZeros((n / 1e6).toFixed(1)) + "M";
+  if (n >= 1e3) return Math.round(n / 1e3) + "K";
   return String(Math.round(n));
 };
 const formatTenure = (joinDate, endDate) => {
@@ -104,11 +109,15 @@ const RELIABILITY_EPS = 1e-9;
 const weightGroup = (type, role) => (STATE_EVENT_TYPES.has(type) ? "state" : usesRoles(type) && role === "sub" ? "sub" : "joiner");
 function computeReliability(participation, events, today) {
   const eventById = {}; events.forEach((e) => { eventById[e.id] = e; });
+  const hasAttendance = new Set(); participation.forEach((p) => { if (p.attended) hasAttendance.add(p.eventId); });
   const perMember = {};
   participation.forEach((p) => {
     if (!p.signedUp) return;
     const ev = eventById[p.eventId];
     if (!ev || ev.date > today) return; // future-dated events never count
+    // An event dated today (game day, UTC) counts only once someone has been ticked as attended;
+    // from the next game day onward it always counts.
+    if (ev.date === today && !hasAttendance.has(ev.id)) return;
     const w = RELIABILITY.weights[weightGroup(ev.type, p.role)];
     const isNoShow = !p.attended;
     const partial = p.attended && p.durationStatus && p.durationStatus !== "full" && w.partial > 0 ? p.durationStatus : null;
@@ -154,10 +163,18 @@ const breakdownParts = (a) => {
   if (a.vanished) parts.push(`Offline ×${a.vanished}`);
   return parts;
 };
-function TrendMark({ trend, withLabel }) {
+function TrendMark({ trend, withLabel, detail }) {
   const map = { worsening: ["▲", "var(--danger)", "Worsening"], improving: ["▼", "var(--success)", "Improving"], steady: ["–", "var(--steel-dim)", "Steady"] };
   const [sym, color, label] = map[trend] || map.steady;
-  return <span style={{ color, fontWeight: 700 }} title={`Unreliability trend: ${label.toLowerCase()}`}>{sym}{withLabel ? ` ${label}` : ""}</span>;
+  return <span style={{ color, fontWeight: 700 }} title={`Unreliability trend: ${label.toLowerCase()}${detail ? " · " + detail : ""}`}>{sym}{withLabel ? ` ${label}` : ""}</span>;
+}
+// Lets pickers show a member's trend without threading props through every editor.
+const ReliabilityContext = createContext({});
+function MemberTrend({ id }) {
+  const r = useContext(ReliabilityContext)[id];
+  if (!r || !r.trendVisible) return null;
+  const detail = `recent ${Math.round(r.recent.rate * 100)}% vs all-time ${Math.round(r.all.rate * 100)}%`;
+  return <span style={{ fontSize: 12, marginRight: 8 }}><TrendMark trend={r.trend} detail={detail} /></span>;
 }
 
 const SKILL_LABELS = ["No skill", "1st skill", "2nd skill", "3rd skill"];
@@ -722,7 +739,7 @@ function Dashboard({ members, growth, events, participation, config, reliability
         <div className="wsc-power-icon"><Swords size={24} /></div>
         <div>
           <div className="wsc-power-label">Total Alliance Power</div>
-          <div className="wsc-power-value">{fmtCompact(totalPower)}</div>
+          <div className="wsc-power-value">{totalPower > 0 ? fmtPower(totalPower) : "0"}</div>
           <div className="wsc-power-sub">Across {activeMembers.length} member{activeMembers.length !== 1 ? "s" : ""}</div>
         </div>
       </div>
@@ -826,7 +843,7 @@ function RankGroup({ rank, rankLabel, list, selectMode, selected, onToggleOne, o
                   {selectMode && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" className="wsc-checkbox" checked={selected.has(m.id)} onChange={() => onToggleOne(m.id)} /></td>}
                   <td style={{ fontWeight: 600, cursor: "pointer" }} onClick={() => onEdit(m)}>{m.name}</td>
                   <td style={{ textAlign: "center" }}><RoleBadge label={m.customRole} /></td>
-                  <td style={{ fontFamily: "var(--font-mono)", color: "var(--steel)", textAlign: "right" }}>{power !== undefined && power !== "" ? fmtNum(power) : "—"}</td>
+                  <td style={{ fontFamily: "var(--font-mono)", color: "var(--steel)", textAlign: "right" }}>{power !== undefined && power !== "" ? <span title={fmtNum(power)}>{fmtPower(power)}</span> : "—"}</td>
                   <td style={{ color: "var(--steel)", textAlign: "center" }}>{m.joinDate ? fmtDate(m.joinDate) : "Unknown"}</td>
                   <td style={{ color: "var(--steel)", fontFamily: "var(--font-mono)", textAlign: "center" }}><TenureLabel joinDate={m.joinDate} /></td>
                   <td style={{ color: "var(--steel)", textAlign: "center" }}>{last ? fmtDate(last) : "No data"}</td>
@@ -1149,7 +1166,7 @@ function GrowthTab({ members, growth, reliability, onEditMember }) {
                     return (
                       <tr key={m.id} style={{ cursor: "pointer" }} onClick={() => onEditMember(m.id)}>
                         <td style={{ fontWeight: 600 }}><span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><RankBubble rank={m.rank} />{m.name}</span></td>
-                        <td style={{ fontFamily: "var(--font-mono)" }}>{g && g.power !== "" ? fmtNum(g.power) : "—"}</td>
+                        <td style={{ fontFamily: "var(--font-mono)" }}>{g && g.power !== "" ? <span title={fmtNum(g.power)}>{fmtPower(g.power)}</span> : "—"}</td>
                         <td style={{ fontFamily: "var(--font-mono)", color: "var(--steel)" }}>{a ? `${a.attended}/${a.signedUp}` : "—"}</td>
                         <td style={{ fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>{reliability[m.id]?.trendVisible ? <>{Math.round(reliability[m.id].recent.rate * 100)}% <TrendMark trend={reliability[m.id].trend} /></> : <span style={{ color: "var(--steel-dim)" }}>—</span>}</td>
                         <td style={{ fontFamily: "var(--font-mono)" }}>{g?.furnaceLevel || "—"}</td>
@@ -1254,10 +1271,10 @@ function AddParticipantPicker({ members, excludeIds, onAdd }) {
           {candidates.length === 0 ? (
             <div style={{ padding: 10, fontSize: 12.5, color: "var(--steel-dim)" }}>No matches</div>
           ) : candidates.map((m, i) => (
-            <div key={m.id} ref={(el) => (itemRefs.current[i] = el)} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--border-soft)", background: i === highlighted ? "var(--bg-elev)" : "transparent" }}
+            <div key={m.id} ref={(el) => (itemRefs.current[i] = el)} style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, display: "flex", justifyContent: "space-between", borderBottom: "1px solid var(--border-soft)", background: i === highlighted ? "var(--bg-elev)" : "transparent" }}
               onMouseEnter={() => setHighlighted(i)}
               onClick={() => select(m)}>
-              {m.name}
+              <span>{m.name}</span><MemberTrend id={m.id} />
             </div>
           ))}
         </div>
@@ -1330,7 +1347,7 @@ function EventDetail({ event, members, participation, canyonAssignments, foundry
               const accent = isBattle ? "var(--success)" : "var(--frost)";
               return (
                 <tr key={m.id}>
-                  <td>{m.name}
+                  <td>{m.name}<span style={{ marginLeft: 8 }}><MemberTrend id={m.id} /></span>
                     {hasRoles && <RolePill role={isSub ? "sub" : "joiner"} onToggle={() => onSetRole(event.id, m.id, isSub ? "joiner" : "sub")} />}
                     {isBattle && noShow && <span className="wsc-pill" style={{ background: "#E2604F22", color: "var(--danger)", marginLeft: 8 }}>{isSub ? "Not online" : "No-show"}</span>}
                   </td>
@@ -1462,7 +1479,7 @@ function SeatPicker({ value, roster, usedIds, powerByMember, onSelect }) {
         <div className="wsc-input" style={{ flex: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}
           onClick={() => { setEditing(true); setQuery(isFreeText ? value : ""); }}>
           <span>{current ? current.name : value}</span>
-          {current && powerByMember[current.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{fmtNum(powerByMember[current.id])}</span> : null}
+          {current ? <span style={{ display: "inline-flex", alignItems: "center" }}><MemberTrend id={current.id} />{powerByMember[current.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }} title={fmtNum(powerByMember[current.id])}>{fmtPower(powerByMember[current.id])}</span> : null}</span> : null}
         </div>
         <button className="wsc-btn wsc-btn-icon" onClick={() => onSelect("")} aria-label="Clear seat"><X size={12} color="var(--steel-dim)" /></button>
       </div>
@@ -1495,7 +1512,7 @@ function SeatPicker({ value, roster, usedIds, powerByMember, onSelect }) {
               onMouseEnter={() => setHighlighted(i)}
               onMouseDown={() => selectCandidate(m)}>
               <span>{m.name}</span>
-              {powerByMember[m.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{fmtNum(powerByMember[m.id])}</span> : null}
+              <span style={{ display: "inline-flex", alignItems: "center" }}><MemberTrend id={m.id} />{powerByMember[m.id] ? <span style={{ color: "var(--steel-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }} title={fmtNum(powerByMember[m.id])}>{fmtPower(powerByMember[m.id])}</span> : null}</span>
             </div>
           ))}
         </div>
@@ -2291,6 +2308,7 @@ export default function App() {
   );
 
   return (
+    <ReliabilityContext.Provider value={reliability}>
     <div className="wsc">
       <style>{STYLE}</style>
       <Sidebar tab={tab} setTab={setTab} allianceName={config.allianceName} leaderName={config.leaderName} leaverCount={leaverCount} />
@@ -2334,5 +2352,6 @@ export default function App() {
       {showAddEvent && <EventModal onClose={() => setShowAddEvent(false)} onSave={addEvent} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} />}
       {openEvent && <EventDetail event={openEvent} members={members} participation={participation} canyonAssignments={canyonAssignments} foundryAssignments={foundryAssignments} onClose={() => setOpenEvent(null)} onDelete={deleteEvent} onToggleSignUp={toggleSignUp} onToggleAttend={toggleAttend} onSetDuration={setDuration} onScore={setScore} onNote={setNote} onSetRole={setRole} onImportFromPlan={importFromPlan} />}
     </div>
+    </ReliabilityContext.Provider>
   );
 }
