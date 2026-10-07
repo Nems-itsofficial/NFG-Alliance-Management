@@ -1619,11 +1619,14 @@ function SeatPicker({ value, roster, usedIds, powerByMember, onSelect, pool }) {
 }
 function PoolPanel({ pool, roster, onToggleAll }) {
   const [open, setOpen] = useState(false);
+  useEffect(() => { if (pool.showAll) setOpen(true); }, [pool.showAll]); // ticking "Show whole roster" shows the list straight away
   const pooled = roster.filter((m) => pool.ids.has(m.id));
   const isSub = (m) => pool.roles[m.id] === "sub";
   const unseated = pooled.filter((m) => !pool.seatedIds.has(m.id));
   const unJ = unseated.filter((m) => !isSub(m)), unS = unseated.filter(isSub);
   const ev = pool.event;
+  const outsiders = pool.showAll ? roster.filter((m) => !pool.ids.has(m.id) && !pool.seatedIds.has(m.id)) : [];
+  const nothingToShow = unseated.length === 0 && outsiders.length === 0;
   return (
     <div className="wsc-card" style={{ marginBottom: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -1639,16 +1642,32 @@ function PoolPanel({ pool, roster, onToggleAll }) {
           <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }} title="Seating someone who isn't signed up adds them to the event as a Joiner">
             <input type="checkbox" className="wsc-checkbox" checked={pool.showAll} onChange={onToggleAll} />Show whole roster
           </label>
-          <button className="wsc-btn wsc-btn-sm" onClick={() => setOpen((o) => !o)} disabled={unseated.length === 0}>{open ? "Hide" : "Show who's left"}</button>
+          <button className="wsc-btn wsc-btn-sm" onClick={() => setOpen((o) => !o)} disabled={nothingToShow}>{open ? "Hide" : "Show who's left"}</button>
         </div>
       </div>
-      {open && unseated.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-          {[...unJ, ...unS].map((m) => (
-            <span key={m.id} className="wsc-pill" style={{ background: "var(--panel-2)", color: "var(--white)", display: "inline-flex", alignItems: "center", gap: 4 }}>
-              {m.name}{isSub(m) && <SeatTag tone="amber">Sub</SeatTag>}<span style={{ marginLeft: 4 }}><MemberTrend id={m.id} /></span>
-            </span>
-          ))}
+      {open && !nothingToShow && (
+        <div style={{ marginTop: 10, maxHeight: 260, overflowY: "auto" }}>
+          {unseated.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {[...unJ, ...unS].map((m) => (
+                <span key={m.id} className="wsc-pill" style={{ background: "var(--panel-2)", color: "var(--white)", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  {m.name}{isSub(m) && <SeatTag tone="amber">Sub</SeatTag>}<span style={{ marginLeft: 4 }}><MemberTrend id={m.id} /></span>
+                </span>
+              ))}
+            </div>
+          )}
+          {outsiders.length > 0 && (
+            <>
+              <div style={{ fontSize: 11.5, color: "var(--steel-dim)", margin: "12px 0 6px" }} title="Seating one of these adds them to the event as a Joiner">Not signed up ({outsiders.length}) — seating one adds them to the event as a Joiner</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {outsiders.map((m) => (
+                  <span key={m.id} className="wsc-pill" style={{ background: "transparent", color: "var(--steel)", border: "1px solid var(--border)", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    {m.name}<span style={{ marginLeft: 4 }}><MemberTrend id={m.id} /></span>
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>
