@@ -281,14 +281,14 @@ function matchTrackerRows(rows, roster) {
   return { rows: out, duplicates };
 }
 // Turns the reviewed rows into the exact writes to make.
-function planTrackerImport(rows, members, growth, today) {
+function planTrackerImport(rows, members, growth, today, { renameNames = true } = {}) {
   const memberById = {}; members.forEach((m) => { memberById[m.id] = m; });
   const growthById = {}; growth.forEach((g) => { growthById[g.memberId] = g; });
-  const plan = { growth: [], memberUpdates: [], newMembers: [], conflicts: 0, rankChanges: 0, aliasAdds: 0 };
+  const plan = { growth: [], memberUpdates: [], newMembers: [], conflicts: 0, rankChanges: 0, aliasAdds: 0, renames: 0 };
   const used = new Set();
   rows.forEach((r) => {
     if (!r.include || !r.choice || r.choice === "__skip") return;
-    if (r.choice === "__new") { plan.newMembers.push({ name: r.name, rank: r.rank || "R1", power: r.power, score: r.score }); return; }
+    if (r.choice === "__new") { plan.newMembers.push({ name: r.name, rank: r.rank || "R1", power: r.power, score: r.score, pos: r.pos }); return; }
     const m = memberById[r.choice];
     if (!m) return;
     if (used.has(m.id)) { plan.conflicts++; return; }
@@ -299,17 +299,23 @@ function planTrackerImport(rows, members, growth, today) {
       memberId: m.id, power: r.power,
       previousPower: old != null && old !== r.power ? old : (g ? g.previousPower : ""),
       labyrinthScore: r.score != null ? r.score : (g ? g.labyrinthScore : ""),
+      labyrinthPos: r.score != null ? r.pos : (g ? g.labyrinthPos ?? "" : ""),
       updatedDate: today,
     });
     const patch = {};
     if (r.rank && r.rank !== m.rank) { patch.rank = r.rank; plan.rankChanges++; }
     const nn = normName(r.name);
-    if (nn && nn !== normName(m.name) && !(m.aliases || []).some((a) => normName(a) === nn)) { patch.aliases = [...(m.aliases || []), r.name]; plan.aliasAdds++; }
+    if (renameNames && !r.keepName && r.name !== m.name) {
+      // the tracker's name wins; the old name is kept as an alias so older lists still match
+      patch.name = r.name; plan.renames++;
+      const on = normName(m.name);
+      if (on && on !== nn && !(m.aliases || []).some((a) => normName(a) === on)) { patch.aliases = [...(m.aliases || []), m.name]; plan.aliasAdds++; }
+    } else if (nn && nn !== normName(m.name) && !(m.aliases || []).some((a) => normName(a) === nn)) { patch.aliases = [...(m.aliases || []), r.name]; plan.aliasAdds++; }
     if (Object.keys(patch).length) plan.memberUpdates.push({ id: m.id, ...patch });
   });
   return plan;
 }
-const growthPayload = (g) => ({ ...growthToRow(g), labyrinth_score: g.labyrinthScore === "" || g.labyrinthScore == null ? null : g.labyrinthScore });
+const growthPayload = (g) => ({ ...growthToRow(g), labyrinth_score: g.labyrinthScore === "" || g.labyrinthScore == null ? null : g.labyrinthScore, labyrinth_pos: g.labyrinthPos === "" || g.labyrinthPos == null ? null : g.labyrinthPos });
 // Executes a plan against Supabase. Takes the client as a parameter so it can be tested with a stand-in.
 async function runTrackerImport(sb, plan, { members, growth, today }) {
   const memberById = {}; members.forEach((m) => { memberById[m.id] = m; });
@@ -321,12 +327,12 @@ async function runTrackerImport(sb, plan, { members, growth, today }) {
     const { data, error } = await sb.from("members").insert(memberToRow({ name: nm.name, gameId: "", rank: nm.rank, status: "active", customRole: "", joinDate: today, leftDate: "", notes: "" })).select().single();
     if (error || !data) throw new Error(`Couldn't add "${nm.name}": ${error?.message || "unknown error"}`);
     snapshot.newMemberIds.push(data.id); out.newMembers.push(rowToMember(data));
-    merged.push({ memberId: data.id, furnaceLevel: "", classes: {}, power: nm.power, previousPower: "", labyrinthScore: nm.score ?? "", updatedDate: today });
+    merged.push({ memberId: data.id, furnaceLevel: "", classes: {}, power: nm.power, previousPower: "", labyrinthScore: nm.score ?? "", labyrinthPos: nm.score != null ? (nm.pos ?? "") : "", updatedDate: today });
   }
   for (const e of plan.growth) {
     const base = growthById[e.memberId] || { memberId: e.memberId, furnaceLevel: "", classes: {} };
     snapshot.growthBefore.push({ memberId: e.memberId, before: growthById[e.memberId] || null });
-    merged.push({ ...base, power: e.power, previousPower: e.previousPower, labyrinthScore: e.labyrinthScore, updatedDate: e.updatedDate });
+    merged.push({ ...base, power: e.power, previousPower: e.previousPower, labyrinthScore: e.labyrinthScore, labyrinthPos: e.labyrinthPos, updatedDate: e.updatedDate });
   }
   for (let i = 0; i < merged.length; i += 50) {
     const { data, error } = await sb.from("growth").upsert(merged.slice(i, i + 50).map(growthPayload), { onConflict: "member_id" }).select();
@@ -336,7 +342,7 @@ async function runTrackerImport(sb, plan, { members, growth, today }) {
   for (const u of plan.memberUpdates) {
     const { id, ...patch } = u;
     const m = memberById[id];
-    snapshot.memberBefore.push({ id, rank: m.rank, aliases: m.aliases || [] });
+    snapshot.memberBefore.push({ id, name: m.name, rank: m.rank, aliases: m.aliases || [] });
     const { error } = await sb.from("members").update(patch).eq("id", id);
     if (error) throw new Error(`Couldn't update ${m.name}: ${error.message}`);
     out.memberPatches[id] = patch;
@@ -364,20 +370,22 @@ async function runTrackerUndo(sb, snapshot) {
     }
   }
   for (const b of snapshot.memberBefore) {
-    const patch = { rank: b.rank, aliases: b.aliases };
+    const patch = { name: b.name, rank: b.rank, aliases: b.aliases };
     const { error } = await sb.from("members").update(patch).eq("id", b.id);
     if (error) throw new Error(`Couldn't undo: ${error.message}`);
     res.memberPatches[b.id] = patch;
   }
   return res;
 }
-// Labyrinth rank (#1, #2, ...) is worked out from the stored scores of current members; ties share a rank.
+// Labyrinth rank (#1, #2, ...) is worked out from the stored scores of current members. Everyone gets their own number:
+// equal scores are ordered the way the tracker listed them (its #NN position), then by name.
 function computeLabyrinthRanks(growth, members) {
-  const active = new Set(members.filter((m) => m.status !== "left").map((m) => m.id));
-  const rows = growth.filter((g) => active.has(g.memberId) && g.labyrinthScore !== "" && g.labyrinthScore != null)
-    .map((g) => ({ id: g.memberId, score: Number(g.labyrinthScore) })).sort((a, b) => b.score - a.score);
+  const byId = {}; members.forEach((m) => { byId[m.id] = m; });
+  const rows = growth.filter((g) => byId[g.memberId] && byId[g.memberId].status !== "left" && g.labyrinthScore !== "" && g.labyrinthScore != null)
+    .map((g) => ({ id: g.memberId, score: Number(g.labyrinthScore), pos: g.labyrinthPos === "" || g.labyrinthPos == null ? Infinity : Number(g.labyrinthPos), name: byId[g.memberId].name }))
+    .sort((a, b) => b.score - a.score || (a.pos === b.pos ? 0 : a.pos < b.pos ? -1 : 1) || a.name.localeCompare(b.name));
   const out = {};
-  rows.forEach((r, i) => { out[r.id] = { score: r.score, rank: i > 0 && rows[i - 1].score === r.score ? out[rows[i - 1].id].rank : i + 1 }; });
+  rows.forEach((r, i) => { out[r.id] = { score: r.score, rank: i + 1 }; });
   return out;
 }
 const LabyrinthContext = createContext({});
@@ -393,8 +401,8 @@ const SKILL_LABELS = ["No skill", "1st skill", "2nd skill", "3rd skill"];
 const rowToMember = (r) => ({ id: r.id, name: r.name, gameId: r.game_id || "", rank: r.rank, status: r.status, customRole: r.custom_role || "", joinDate: r.join_date || "", leftDate: r.left_date || "", notes: r.notes || "", aliases: Array.isArray(r.aliases) ? r.aliases : [] });
 // aliases is only written when there are some, so everything keeps working before the aliases column exists
 const memberToRow = (m) => ({ name: m.name, game_id: m.gameId || "", rank: m.rank, status: m.status, custom_role: m.customRole || "", join_date: m.joinDate || null, left_date: m.leftDate || null, notes: m.notes || "", ...(m.aliases && m.aliases.length ? { aliases: m.aliases } : {}) });
-const rowToGrowth = (r) => ({ memberId: r.member_id, power: r.power ?? "", previousPower: r.previous_power ?? "", furnaceLevel: r.furnace_level || "", classes: r.classes || {}, updatedDate: r.updated_date || "", labyrinthScore: r.labyrinth_score ?? "" });
-const growthToRow = (g) => ({ member_id: g.memberId, power: g.power === "" ? null : g.power, previous_power: g.previousPower === "" ? null : g.previousPower, furnace_level: g.furnaceLevel || "", classes: g.classes || {}, updated_date: g.updatedDate || null, ...(g.labyrinthScore !== "" && g.labyrinthScore != null ? { labyrinth_score: g.labyrinthScore } : {}) });
+const rowToGrowth = (r) => ({ memberId: r.member_id, power: r.power ?? "", previousPower: r.previous_power ?? "", furnaceLevel: r.furnace_level || "", classes: r.classes || {}, updatedDate: r.updated_date || "", labyrinthScore: r.labyrinth_score ?? "", labyrinthPos: r.labyrinth_pos ?? "" });
+const growthToRow = (g) => ({ member_id: g.memberId, power: g.power === "" ? null : g.power, previous_power: g.previousPower === "" ? null : g.previousPower, furnace_level: g.furnaceLevel || "", classes: g.classes || {}, updated_date: g.updatedDate || null, ...(g.labyrinthScore !== "" && g.labyrinthScore != null ? { labyrinth_score: g.labyrinthScore } : {}), ...(g.labyrinthPos !== "" && g.labyrinthPos != null ? { labyrinth_pos: g.labyrinthPos } : {}) });
 const rowToEvent = (r) => ({ id: r.id, date: r.date, type: r.type, name: r.name, session: r.session || "", mode: r.mode || "score", linkedType: r.linked_type || "", linkedId: r.linked_id || "" });
 const eventToRow = (e) => ({ date: e.date, type: e.type, name: e.name, session: e.session || "", mode: e.mode || "score", linked_type: e.linkedType || null, linked_id: e.linkedId || null });
 const rowToPart = (r) => ({ id: r.id, eventId: r.event_id, memberId: r.member_id, signedUp: !!r.signed_up, attended: !!r.attended, durationStatus: r.duration_status || "full", role: r.role || "joiner", score: r.score ?? "", note: r.note || "", strategy: r.strategy || "" });
@@ -1316,13 +1324,14 @@ function TrackerImportModal({ members, growth, onApply, onUndo, onExportBackup, 
   const [rows, setRows] = useState(null);
   const [dupes, setDupes] = useState(0);
   const [onlyAttention, setOnlyAttention] = useState(false);
+  const [renameNames, setRenameNames] = useState(true);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const parsed = useMemo(() => parseTrackerText(text), [text]);
   const review = () => { const m = matchTrackerRows(parsed.rows, roster); setRows(m.rows); setDupes(m.duplicates); };
   const update = (i, patch) => setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   const choose = (i, choice) => update(i, { choice, include: choice !== "" && choice !== "__skip" });
-  const plan = useMemo(() => (rows ? planTrackerImport(rows, members, growth, todayStr()) : null), [rows, members, growth]);
+  const plan = useMemo(() => (rows ? planTrackerImport(rows, members, growth, todayStr(), { renameNames }) : null), [rows, members, growth, renameNames]);
   const chosen = useMemo(() => new Set((rows || []).map((r) => r.choice).filter((c) => c && c[0] !== "_")), [rows]);
   const needsAttention = (r) => r.choice === "" || r.status === "check" || (r.choice && r.choice[0] !== "_" && memberById[r.choice] && growthById[r.choice]?.power !== "" && growthById[r.choice]?.power != null && Math.abs(r.power - Number(growthById[r.choice].power)) / Number(growthById[r.choice].power) > TRACKER_BIG_CHANGE);
   const apply = async () => {
@@ -1347,7 +1356,7 @@ function TrackerImportModal({ members, growth, onApply, onUndo, onExportBackup, 
               <>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Import applied</div>
                 <div style={{ fontSize: 13, color: "var(--steel)" }}>
-                  {result.summary.updated} player{result.summary.updated !== 1 ? "s" : ""} updated · {result.summary.added} new member{result.summary.added !== 1 ? "s" : ""} · {result.summary.rankChanges} rank change{result.summary.rankChanges !== 1 ? "s" : ""}{result.summary.aliasAdds > 0 ? ` · ${result.summary.aliasAdds} name${result.summary.aliasAdds !== 1 ? "s" : ""} remembered` : ""}
+                  {result.summary.updated} player{result.summary.updated !== 1 ? "s" : ""} updated · {result.summary.added} new member{result.summary.added !== 1 ? "s" : ""} · {result.summary.rankChanges} rank change{result.summary.rankChanges !== 1 ? "s" : ""} · {result.summary.renames} renamed{result.summary.aliasAdds > 0 ? ` · ${result.summary.aliasAdds} name${result.summary.aliasAdds !== 1 ? "s" : ""} remembered` : ""}
                 </div>
               </>
             )}
@@ -1399,6 +1408,7 @@ function TrackerImportModal({ members, growth, onApply, onUndo, onExportBackup, 
           {rows.length} rows · {exactN} matched · <span style={{ color: checkN ? "var(--amber)" : undefined }}>{checkN} to check</span> · <span style={{ color: unresolvedN ? "var(--danger)" : undefined }}>{unresolvedN} need a match</span> · {notSeen} roster member{notSeen !== 1 ? "s" : ""} not in this list (left untouched){dupes ? ` · ${dupes} duplicate${dupes !== 1 ? "s" : ""} ignored` : ""}
         </div>
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }} title="Roster names are changed to the name shown on the tracker. The old name is remembered, so older lists still match."><input type="checkbox" className="wsc-checkbox" checked={renameNames} onChange={() => setRenameNames((v) => !v)} />Update names to match the tracker</label>
           <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}><input type="checkbox" className="wsc-checkbox" checked={onlyAttention} onChange={() => setOnlyAttention((v) => !v)} />Only rows needing attention</label>
           {unresolvedN > 0 && <button className="wsc-btn wsc-btn-sm" onClick={() => setRows((prev) => prev.map((r) => (r.choice === "" ? { ...r, choice: "__new", include: true } : r)))}><Plus size={12} /> Add all unmatched as new members</button>}
         </div>
@@ -1430,6 +1440,12 @@ function TrackerImportModal({ members, growth, onApply, onUndo, onExportBackup, 
                     </select>
                     {r.status === "check" && r.choice === r.auto && <SeatTag tone="amber" title="Close but not exact: tick the row only if this is the right person">Check</SeatTag>}
                     {r.choice === "" && <SeatTag tone="amber">Needs match</SeatTag>}
+                    {renameNames && m && r.name !== m.name && (
+                      <div style={{ fontSize: 11.5, marginTop: 4, color: r.keepName ? "var(--steel-dim)" : "var(--amber)" }}>
+                        {r.keepName ? <s>rename to {r.name}</s> : <>rename &rarr; <b>{r.name}</b></>}
+                        <button type="button" className="wsc-btn wsc-btn-sm" style={{ marginLeft: 8, padding: "0 6px", fontSize: 10.5 }} onClick={() => update(i, { keepName: !r.keepName })}>{r.keepName ? "rename" : "keep name"}</button>
+                      </div>
+                    )}
                     {r.choice === "__new" && <SeatTag>New member</SeatTag>}
                   </td>
                   <td style={{ fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
@@ -1450,7 +1466,7 @@ function TrackerImportModal({ members, growth, onApply, onUndo, onExportBackup, 
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
         <div style={{ fontSize: 12.5, color: "var(--steel-dim)" }}>
-          Will update {plan.growth.length} · add {plan.newMembers.length} new · change {plan.rankChanges} rank{plan.rankChanges !== 1 ? "s" : ""}{plan.conflicts ? ` · ${plan.conflicts} skipped (same member picked twice)` : ""}. Power from the tracker is rounded (like 1.38B).
+          Will update {plan.growth.length} · add {plan.newMembers.length} new · change {plan.rankChanges} rank{plan.rankChanges !== 1 ? "s" : ""} · rename {plan.renames}{plan.conflicts ? ` · ${plan.conflicts} skipped (same member picked twice)` : ""}. Power from the tracker is rounded (like 1.38B).
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="wsc-btn wsc-btn-sm" onClick={onExportBackup}><Download size={12} /> Download backup first</button>
@@ -1478,7 +1494,7 @@ function GrowthTab({ members, growth, reliability, onEditMember }) {
     const a = attendanceByMember[m.id];
     switch (sortKey) {
       case "power": return g && g.power !== "" ? Number(g.power) : -1;
-      case "labyrinth": return lab[m.id] ? lab[m.id].score : -1;
+      case "labyrinth": return lab[m.id] ? -lab[m.id].rank : -Infinity;
       case "attendance": return a ? a.attended / a.signedUp : -1;
       case "updated": return g?.updatedDate || "";
       case "trend": return reliability[m.id]?.trendVisible ? reliability[m.id].recent.rate : -1;
@@ -1517,7 +1533,7 @@ function GrowthTab({ members, growth, reliability, onEditMember }) {
                 <thead><tr>
                   <SortHeader sortKeyName="name">Member</SortHeader>
                   <SortHeader sortKeyName="power">Power</SortHeader>
-                  <SortHeader sortKeyName="labyrinth" title="Labyrinth rank within the alliance, from the score imported from the tracker. #1 = strongest. Click to sort.">Labyrinth</SortHeader>
+                  <SortHeader sortKeyName="labyrinth" title="Labyrinth rank within the alliance, from the score imported from the tracker (equal scores follow the tracker order). #1 = strongest. Click to sort.">Labyrinth</SortHeader>
                   <SortHeader sortKeyName="attendance">Attendance</SortHeader>
                   <SortHeader sortKeyName="trend" title="Unreliability trend: recent rate (last 5 sign-ups) vs all-time. Red ▲ = getting worse, green ▼ = improving. Shown from 3 sign-ups. Click to sort by recent rate.">Trend</SortHeader>
                   <th>Furnace</th>
@@ -2466,7 +2482,7 @@ export default function App() {
       const { out, snapshot } = await runTrackerImport(supabase, plan, { members, growth, today: todayStr() });
       setMembers((prev) => [...prev.map((m) => (out.memberPatches[m.id] ? { ...m, ...out.memberPatches[m.id] } : m)), ...out.newMembers]);
       setGrowth((prev) => { const map = new Map(prev.map((g) => [g.memberId, g])); out.growthRows.forEach((g) => map.set(g.memberId, g)); return [...map.values()]; });
-      return { ok: true, snapshot, summary: { updated: plan.growth.length, added: plan.newMembers.length, rankChanges: plan.rankChanges, aliasAdds: plan.aliasAdds } };
+      return { ok: true, snapshot, summary: { updated: plan.growth.length, added: plan.newMembers.length, rankChanges: plan.rankChanges, renames: plan.renames, aliasAdds: plan.aliasAdds } };
     } catch (e) { return { ok: false, error: e.message }; }
   }, [members, growth]);
 
