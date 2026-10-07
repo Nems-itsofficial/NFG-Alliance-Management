@@ -185,8 +185,14 @@ const ReliabilityContext = createContext({});
 function MemberTrend({ id }) {
   const r = useContext(ReliabilityContext)[id];
   if (!r || !r.trendVisible) return null;
-  const detail = `recent ${Math.round(r.recent.rate * 100)}% vs all-time ${Math.round(r.all.rate * 100)}%`;
-  return <span style={{ fontSize: 12, marginRight: 8 }}><TrendMark trend={r.trend} detail={detail} /></span>;
+  const pct = Math.round(r.recent.rate * 100);
+  const title = `Recent unreliability ${pct}% (last ${RELIABILITY.window} sign-ups) vs ${Math.round(r.all.rate * 100)}% all-time${r.flagged ? " · flagged" : ""}`;
+  return (
+    <span title={title} style={{ fontSize: 12, marginRight: 8, display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "var(--font-mono)" }}>
+      <span style={{ color: r.flagged ? "var(--danger)" : "var(--steel-dim)", fontWeight: r.flagged ? 700 : 400 }}>{pct}%</span>
+      {r.trend !== "steady" && <TrendMark trend={r.trend} />}
+    </span>
+  );
 }
 
 const SKILL_LABELS = ["No skill", "1st skill", "2nd skill", "3rd skill"];
