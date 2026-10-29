@@ -2,7 +2,6 @@ name: Supabase Keep-Alive
 
 on:
   schedule:
-    # Runs every 3 days at 04:00 UTC
     - cron: '0 4 */3 * *'
   workflow_dispatch:
 
@@ -11,22 +10,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping Supabase REST API
-        env:
-          URL: ${{ secrets.VITE_SUPABASE_URL }}
-          KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: |
-          # Strip any trailing slash from the URL to prevent double-slashes in the API path
-          CLEAN_URL=$(echo $URL | sed 's:/*$::')
+          # Hardcoding the public variables to bypass GitHub Secrets
+          URL="https://ltpapowuiglswfgvrkjr.supabase.co"
+          KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0cGFwb3d1aWdsc3dmZ3Zya2pyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxMjExMjgsImV4cCI6MjEwMjY5NzEyOH0.GvGmvrK6ngQwZQVb5oCAvwZLai7g3SGrxqiCE1-HyFQ"
           
-          # Check if the secret is actually loading
-          if [ -z "$KEY" ]; then
-            echo "Error: VITE_SUPABASE_ANON_KEY is empty. GitHub Actions cannot see the secret."
-            exit 1
-          fi
+          # Clean URL just in case of trailing slashes
+          CLEAN_URL=$(echo $URL | sed 's:/*$::')
           
           echo "Sending heartbeat to Supabase..."
 
-          # Send the authenticated ping request
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -X GET "$CLEAN_URL/rest/v1/ping?select=id" \
             -H "apikey: $KEY" \
