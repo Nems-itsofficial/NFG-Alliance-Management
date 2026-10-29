@@ -12,23 +12,29 @@ jobs:
       - name: Ping Supabase REST API
         run: |
           URL="https://ltpapowuiglswfgvrkjr.supabase.co"
-          KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0cGFwb3d1aWdsc3dmZ3Zya2pyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxMjExMjgsImV4cCI6MjEwMjY5NzEyOH0.GvGmvrK6ngQwZQVb5oCAvwZLai7g3SGrxqiCE1-HyFQ"
           
-          CLEAN_URL=$(echo $URL | sed 's:/*$::')
+          # Replace this with your exact sb_publishable_... key
+          KEY="sb_publishable_Y5IpJNJEmy9Exo_hDaOsPg_6KtG8dSx"
           
           echo "Sending heartbeat to Supabase..."
 
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X GET "$CLEAN_URL/rest/v1/ping?select=id" \
+          # This captures both the response message AND the status code
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X GET "$URL/rest/v1/ping?select=id" \
             -H "apikey: $KEY" \
             -H "Authorization: Bearer $KEY")
           
-          echo "Supabase response status: $HTTP_STATUS"
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          STATUS=$(echo "$RESPONSE" | tail -n1)
+          
+          echo "----------------------------------------"
+          echo "Status Code: $STATUS"
+          echo "Server Response: $BODY"
+          echo "----------------------------------------"
 
-          if [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "Heartbeat ping failed! Expected HTTP 200."
+          if [ "$STATUS" -ne 200 ]; then
+            echo "Heartbeat failed! Read the Server Response above to see exactly why Supabase rejected it."
             exit 1
           fi
           
-          echo "Supabase successfully pinged. Inactivity timer reset."
-        
+          echo "Success! Inactivity timer reset."
