@@ -11,11 +11,9 @@ jobs:
     steps:
       - name: Ping Supabase REST API
         run: |
-          # Hardcoding the public variables to bypass GitHub Secrets
           URL="https://ltpapowuiglswfgvrkjr.supabase.co"
           KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0cGFwb3d1aWdsc3dmZ3Zya2pyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxMjExMjgsImV4cCI6MjEwMjY5NzEyOH0.GvGmvrK6ngQwZQVb5oCAvwZLai7g3SGrxqiCE1-HyFQ"
           
-          # Clean URL just in case of trailing slashes
           CLEAN_URL=$(echo $URL | sed 's:/*$::')
           
           echo "Sending heartbeat to Supabase..."
@@ -33,3 +31,4 @@ jobs:
           fi
           
           echo "Supabase successfully pinged. Inactivity timer reset."
+        
