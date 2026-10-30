@@ -191,6 +191,16 @@ function MemberTrend({ id }) {
     <span title={title} style={{ fontSize: 12, marginRight: 8, display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "var(--font-mono)" }}>
       <span style={{ color: r.flagged ? "var(--danger)" : "var(--steel-dim)", fontWeight: r.flagged ? 700 : 400 }}>{pct}%</span>
       {r.trend !== "steady" && <TrendMark trend={r.trend} />}
+
+const matchesSearch = (member, query) => {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return (
+    (member.name || "").toLowerCase().includes(q) ||
+    (member.gameId || "").toLowerCase().includes(q) ||
+    (member.aliases || []).some(a => (a || "").toLowerCase().includes(q))
+  );
+};
     </span>
   );
 }
@@ -785,6 +795,18 @@ function MemberModal({ member, onClose, onSave, onDelete }) {
         <input className="wsc-input" value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="Chief name" /></div>
       <div className="wsc-field"><label className="wsc-label">Game ID (optional)</label>
         <input className="wsc-input" value={form.gameId} onChange={(e) => set("gameId", e.target.value)} placeholder="123456789" /></div>
+      <div className="wsc-field">
+        <label className="wsc-label">Search Tags / Plain-Text Name (Optional)</label>
+        <input 
+          className="wsc-input" 
+          value={(form.aliases || []).join(", ")} 
+          onChange={(e) => set("aliases", e.target.value.split(",").map(s => s.trim()).filter(Boolean))} 
+          placeholder="e.g. Nemesis" 
+        />
+        <div style={{ fontSize: 12, color: "var(--steel-dim)", marginTop: 4 }}>
+          Add normal letters here if their name uses special characters, so you can still search them easily.
+        </div>
+      </div>
       <div style={{ display: "flex", gap: 10 }}>
         <div className="wsc-field" style={{ flex: 1 }}><label className="wsc-label">Rank</label>
           <select className="wsc-select" value={form.rank} onChange={(e) => set("rank", e.target.value)}>{RANKS.map((r) => <option key={r} value={r}>{r}</option>)}</select></div>
@@ -1102,7 +1124,7 @@ function RosterTab({ members, growth, lastActivityByMember, rankLabels, onEdit, 
     if (roleFilter !== "all" && !roleOptions.includes(roleFilter)) setRoleFilter("all");
   }, [roleOptions, roleFilter]);
   const filtered = roster.filter((m) => {
-    const matchesQuery = m.name.toLowerCase().includes(query.toLowerCase()) || (m.gameId || "").includes(query);
+    const matchesQuery = matchesSearch(m, query);
     const matchesRank = rankFilter === "all" || m.rank === rankFilter;
     const matchesRole = roleFilter === "all" || splitRoles(m.customRole).includes(roleFilter);
     return matchesQuery && matchesRank && matchesRole;
@@ -1488,7 +1510,7 @@ function GrowthTab({ members, growth, reliability, onEditMember }) {
     Object.entries(reliability).forEach(([id, r]) => { map[id] = { attended: r.attended, signedUp: r.signUps }; });
     return map;
   }, [reliability]);
-  const filtered = members.filter((m) => m.name.toLowerCase().includes(query.toLowerCase()));
+  const filtered = members.filter((m) => matchesSearch(m, query));
   const sortValue = (m) => {
     const g = byMember[m.id];
     const a = attendanceByMember[m.id];
@@ -1633,7 +1655,7 @@ function AddParticipantPicker({ members, excludeIds, onAdd }) {
   const [highlighted, setHighlighted] = useState(0);
   const itemRefs = useRef([]);
   const candidates = query
-    ? members.filter((m) => m.status !== "left" && !excludeIds.has(m.id) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 20)
+    ? members.filter((m) => m.status !== "left" && !excludeIds.has(m.id) && matchesSearch(m, query)).slice(0, 20)
     : [];
   useEffect(() => { itemRefs.current[highlighted]?.scrollIntoView({ block: "nearest" }); }, [highlighted]);
   const select = (m) => { onAdd(m.id); setQuery(""); setHighlighted(0); };
@@ -1912,13 +1934,13 @@ function SeatPicker({ value, roster, usedIds, powerByMember, onSelect, pool }) {
   const q = query.toLowerCase();
   let candidates = [];
   if (pool) {
-    const avail = roster.filter((m) => (!usedIds.has(m.id) || m.id === value) && (!q || m.name.toLowerCase().includes(q)));
+    const avail = roster.filter((m) => (!usedIds.has(m.id) || m.id === value) && matchesSearch(m, q));
     const rank = (m) => (pool.seatedIds.has(m.id) ? 2 : 0) + (pool.roles[m.id] === "sub" ? 1 : 0); // unseated joiners, unseated subs, seated joiners, seated subs
     const inPool = avail.filter((m) => pool.ids.has(m.id)).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
     const outside = pool.showAll ? avail.filter((m) => !pool.ids.has(m.id)) : [];
     candidates = [...inPool, ...outside].slice(0, q ? 30 : 80);
   } else if (query) {
-    candidates = roster.filter((m) => (!usedIds.has(m.id) || m.id === value) && m.name.toLowerCase().includes(q)).slice(0, 15);
+    candidates = roster.filter((m) => (!usedIds.has(m.id) || m.id === value) && matchesSearch(m, q)).slice(0, 15);
   }
   const showList = pool ? focused : !!query;
   useEffect(() => { itemRefs.current[highlighted]?.scrollIntoView({ block: "nearest" }); }, [highlighted]);
@@ -2135,7 +2157,7 @@ function CustomTeamCard({ team, roster, powerByMember, onChange, onRemove }) {
   const memberIds = team.memberIds || [];
   const addMember = (id) => { if (!memberIds.includes(id)) onChange({ ...team, memberIds: [...memberIds, id] }); setQuery(""); setHighlighted(0); };
   const removeMember = (id) => onChange({ ...team, memberIds: memberIds.filter((m) => m !== id) });
-  const candidates = query ? roster.filter((m) => !memberIds.includes(m.id) && m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 15) : [];
+  const candidates = query ? roster.filter((m) => !memberIds.includes(m.id) && matchesSearch(m, query)).slice(0, 15) : [];
   useEffect(() => { itemRefs.current[highlighted]?.scrollIntoView({ block: "nearest" }); }, [highlighted]);
   const handleKeyDown = (e) => {
     if (!candidates.length) return;
