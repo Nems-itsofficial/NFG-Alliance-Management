@@ -182,15 +182,6 @@ function TrendMark({ trend, withLabel, detail }) {
 }
 // Lets pickers show a member's trend without threading props through every editor.
 const ReliabilityContext = createContext({});
-function MemberTrend({ id }) {
-  const r = useContext(ReliabilityContext)[id];
-  if (!r || !r.trendVisible) return null;
-  const pct = Math.round(r.recent.rate * 100);
-  const title = `Recent unreliability ${pct}% (last ${RELIABILITY.window} sign-ups) vs ${Math.round(r.all.rate * 100)}% all-time${r.flagged ? " · flagged" : ""}`;
-  return (
-    <span title={title} style={{ fontSize: 12, marginRight: 8, display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "var(--font-mono)" }}>
-      <span style={{ color: r.flagged ? "var(--danger)" : "var(--steel-dim)", fontWeight: r.flagged ? 700 : 400 }}>{pct}%</span>
-      {r.trend !== "steady" && <TrendMark trend={r.trend} />}
 
 const matchesSearch = (member, query) => {
   if (!query) return true;
@@ -201,6 +192,17 @@ const matchesSearch = (member, query) => {
     (member.aliases || []).some(a => (a || "").toLowerCase().includes(q))
   );
 };
+
+function MemberTrend({ id }) {
+  const r = useContext(ReliabilityContext)[id];
+  if (!r || !r.trendVisible) return null;
+  const pct = Math.round(r.recent.rate * 100);
+  const title = `Recent unreliability ${pct}% (last ${RELIABILITY.window} sign-ups) vs ${Math.round(r.all.rate * 100)}% all-time${r.flagged ? " · flagged" : ""}`;
+  return (
+    <span title={title} style={{ fontSize: 12, marginRight: 8, display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "var(--font-mono)" }}>
+      <span style={{ color: r.flagged ? "var(--danger)" : "var(--steel-dim)", fontWeight: r.flagged ? 700 : 400 }}>{pct}%</span>
+      {r.trend !== "steady" && <TrendMark trend={r.trend} />}
+
     </span>
   );
 }
